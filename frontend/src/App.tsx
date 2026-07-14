@@ -1,0 +1,70 @@
+import { useEffect, useState } from "react";
+import { NavLink, Route, Routes } from "react-router-dom";
+import DashboardPage from "./pages/DashboardPage";
+import ShipmentDetailPage from "./pages/ShipmentDetailPage";
+import OpsPage from "./pages/OpsPage";
+
+function useTheme() {
+  const [theme, setTheme] = useState<string>(
+    () => localStorage.getItem("theme") ?? "auto"
+  );
+  useEffect(() => {
+    if (theme === "auto") {
+      delete document.documentElement.dataset.theme;
+      localStorage.removeItem("theme");
+    } else {
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem("theme", theme);
+    }
+  }, [theme]);
+  return { theme, setTheme };
+}
+
+const navCls = ({ isActive }: { isActive: boolean }) =>
+  `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+    isActive ? "bg-s1 text-white" : "text-ink-2 hover:text-ink hover:bg-edge"
+  }`;
+
+export default function App() {
+  const { theme, setTheme } = useTheme();
+  const next = theme === "dark" ? "light" : theme === "light" ? "auto" : "dark";
+  return (
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-[1100] border-b border-edge bg-surface-1/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1500px] items-center gap-4 px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2.5 w-2.5 rounded-full bg-s1" />
+            <span className="text-[15px] font-semibold tracking-tight">
+              RLT Shipment Monitoring
+            </span>
+          </div>
+          <nav className="ml-4 flex items-center gap-1">
+            <NavLink to="/" end className={navCls}>
+              Dashboard
+            </NavLink>
+            <NavLink to="/ops" className={navCls}>
+              Ops Issues
+            </NavLink>
+          </nav>
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-xs text-ink-3">read-only · etl schema</span>
+            <button
+              onClick={() => setTheme(next)}
+              title={`Theme: ${theme} (click for ${next})`}
+              className="rounded-md border border-edge px-2.5 py-1 text-xs text-ink-2 hover:text-ink"
+            >
+              {theme === "dark" ? "◐ dark" : theme === "light" ? "○ light" : "◑ auto"}
+            </button>
+          </div>
+        </div>
+      </header>
+      <main className="mx-auto max-w-[1500px] px-4 py-4">
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/ops" element={<OpsPage />} />
+          <Route path="/shipment/:tracking" element={<ShipmentDetailPage />} />
+        </Routes>
+      </main>
+    </div>
+  );
+}

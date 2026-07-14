@@ -1,0 +1,14 @@
+# secrets — real RDS creds live here
+backend/.env
+
+# python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# reference data (auto-downloaded on first backend start)
+backend/data/airport-codes.csv
+
+# node
+frontend/node_modules/
+frontend/dist/
