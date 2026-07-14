@@ -18,7 +18,7 @@ const endpointIcon = (label: string, color: string) =>
     iconAnchor: [15, 10],
   });
 
-const plottable = (lat: number | null, lon: number | null) =>
+export const plottable = (lat: number | null, lon: number | null) =>
   lat != null && lon != null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 &&
   !(Math.abs(lat) < 1e-6 && Math.abs(lon) < 1e-6); // (0,0) = null island
 

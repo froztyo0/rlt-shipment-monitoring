@@ -103,20 +103,25 @@ async def shipment_pings(tracking: str):
         for r in group
         if str(r.get("salesordernumber") or "").strip()
     })
+    # DESC: rows are duplicated once per SO upstream, so if the cap bites it
+    # must drop the OLDEST fixes, never the newest (analyze_pings re-sorts).
     rows = await fetch_all(
         """SELECT latitude, longitude, device_date_time, device_ping_date_time,
                   current_address, deviceserialnumber, tripid
            FROM etl.sensitech_inbound_trip
            WHERE salesordernumber::text = ANY($1::text[])
-           ORDER BY device_date_time ASC NULLS LAST
+           ORDER BY device_date_time DESC NULLS LAST
            LIMIT 8000""",
         so_list or [tracking],
     )
-    # upstream repeats trip rows once per SO — dedupe on (device, time, position)
+    # upstream repeats trip rows once per SO — dedupe on (device, times, position);
+    # device_ping_date_time is in the key because it's the fallback timestamp
+    # for rows whose device_date_time is NULL (distinct pings, same coords)
     seen: set = set()
     unique = []
     for r in rows:
         key = (r.get("deviceserialnumber"), r.get("device_date_time"),
+               r.get("device_ping_date_time"),
                str(r.get("latitude")), str(r.get("longitude")))
         if key in seen:
             continue

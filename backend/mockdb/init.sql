@@ -30,12 +30,16 @@ CREATE TABLE etl.shipment (
 CREATE TABLE etl.rome_inbound_orders (
   salesordernumber text, orderid text, orderstatus text, orderstatuscategory text,
   ordertype text, cancellationdate text, deliverydate text, injectiondate text,
-  latesterpstatus text, audit_timestamp timestamptz, id bigint
+  latesterpstatus text, audit_timestamp timestamptz, id bigint,
+  deliveryaddressstreet text, deliveryaddresscity text, deliveryaddresszipcode text,
+  deliveryaddressstate text, deliveryaddresscountry text
 );
 CREATE TABLE etl.rome_inbound_rejects (
   salesordernumber text, orderid text, orderstatus text, orderstatuscategory text,
   ordertype text, cancellationdate text, deliverydate text, injectiondate text,
-  latesterpstatus text, audit_timestamp timestamptz, id bigint, error_message text
+  latesterpstatus text, audit_timestamp timestamptz, id bigint, error_message text,
+  deliveryaddressstreet text, deliveryaddresscity text, deliveryaddresszipcode text,
+  deliveryaddressstate text, deliveryaddresscountry text
 );
 
 CREATE TABLE etl.carrier_inbound (

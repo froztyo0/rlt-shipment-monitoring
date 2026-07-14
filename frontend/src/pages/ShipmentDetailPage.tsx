@@ -4,7 +4,7 @@ import { api, Dict, fmt, PingsResponse } from "../api";
 import {
   ErrorBox, IssueChips, Panel, SEV_COLOR, SEV_ICON, SeverityBadge, Spinner, useApi,
 } from "../components/ui";
-import ShipmentMap from "../components/ShipmentMap";
+import ShipmentMap, { plottable } from "../components/ShipmentMap";
 
 const enc = encodeURIComponent;
 
@@ -96,12 +96,12 @@ export default function ShipmentDetailPage() {
       </div>
 
       {/* ---- multi-SO switcher ----------------------------------------------- */}
-      {related.length > 1 && (
+      {related.filter((o) => o.salesordernumber).length > 1 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-ink-3">
-            {related.length} sales orders on this tracking number:
+            {related.filter((o) => o.salesordernumber).length} sales orders on this tracking number:
           </span>
-          {related.map((o) => {
+          {related.filter((o) => o.salesordernumber).map((o) => {
             const active = o.salesordernumber === s.salesordernumber;
             return (
               <button
@@ -142,9 +142,13 @@ export default function ShipmentDetailPage() {
             <Spinner label="Loading GPS pings…" />
           ) : pings.error ? (
             <ErrorBox error={pings.error} />
-          ) : pings.data!.pings.length === 0 && pings.data!.destination.lat == null ? (
+          ) : !pings.data!.pings.some((p) => plottable(p.lat, p.lon)) &&
+            pings.data!.destination.lat == null && pings.data!.origin.lat == null ? (
             <div className="py-6 text-sm text-ink-3">
-              No Sensitech pings and no destination coordinates — nothing to plot.
+              No plottable GPS fixes and no origin/destination coordinates — nothing to map.
+              {pings.data!.pings.length > 0 && (
+                <> ({pings.data!.pings.length} ping(s) exist but carry no valid coordinates — see ghost details.)</>
+              )}
             </div>
           ) : (
             <>
@@ -396,9 +400,11 @@ function Timeline({ d }: { d: Dict }) {
     byUi.get(e.ui_milestone)!.push(e);
   }
   const cancelled = events.filter((e: Dict) => e.flag === 0);
-  const phases = ladder.length
-    ? ladder.map((l: Dict) => l.ui_milestone as string)
-    : [...byUi.keys()];
+  // ladder order first, then any observed milestone the ladder doesn't know
+  // about (mapping drift) — events must never silently vanish
+  const ladderPhases = ladder.map((l: Dict) => l.ui_milestone as string);
+  const extraPhases = [...byUi.keys()].filter((p) => !ladderPhases.includes(p));
+  const phases = ladderPhases.length ? [...ladderPhases, ...extraPhases] : [...byUi.keys()];
   let lastDone = -1;
   phases.forEach((p, i) => { if (byUi.has(p)) lastDone = i; });
 

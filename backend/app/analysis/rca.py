@@ -108,14 +108,22 @@ async def trace_missing_fields(sp: dict) -> list[dict]:
                    if _blank(sp.get(f))]
     if rome_fields:
         row = await fetch_one(
-            """SELECT orderstatus, deliverydate, injectiondate, cancellationdate, audit_timestamp
+            """SELECT orderstatus, deliverydate, injectiondate, cancellationdate, audit_timestamp,
+                      deliveryaddressstreet, deliveryaddresscity, deliveryaddresszipcode,
+                      deliveryaddressstate, deliveryaddresscountry
                FROM etl.rome_inbound_orders WHERE salesordernumber::text = $1
                ORDER BY audit_timestamp DESC NULLS LAST LIMIT 1""", so)
         if row:
             for f in rome_fields:
                 src_val = row["deliverydate"] if f == "planneddeliverydate" else row.get(f)
                 if f == "destinationaddress":
-                    src_val = "delivery address fields"
+                    src_val = ", ".join(
+                        _s(row.get(c)) for c in
+                        ("deliveryaddressstreet", "deliveryaddresscity",
+                         "deliveryaddresszipcode", "deliveryaddressstate",
+                         "deliveryaddresscountry")
+                        if not _blank(row.get(c))
+                    )
                 if src_val is not None and not _blank(src_val):
                     await add(f, "present_upstream", "rome_inbound_orders",
                               f"ROME order (status {row['orderstatus']}) carries this value — "

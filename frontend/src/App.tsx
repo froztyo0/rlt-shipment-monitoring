@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useParams } from "react-router-dom";
 import DashboardPage from "./pages/DashboardPage";
 import ShipmentDetailPage from "./pages/ShipmentDetailPage";
 import OpsPage from "./pages/OpsPage";
+
+// key by tracking number so per-shipment state (e.g. the selected sales
+// order) resets when navigating from one shipment straight to another
+function ShipmentDetailRoute() {
+  const { tracking = "" } = useParams();
+  return <ShipmentDetailPage key={tracking} />;
+}
 
 function useTheme() {
   const [theme, setTheme] = useState<string>(
@@ -62,7 +69,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/ops" element={<OpsPage />} />
-          <Route path="/shipment/:tracking" element={<ShipmentDetailPage />} />
+          <Route path="/shipment/:tracking" element={<ShipmentDetailRoute />} />
         </Routes>
       </main>
     </div>

@@ -131,7 +131,14 @@ export const fmt = {
   },
   ago(v: any): string | null {
     if (v === null || v === undefined || v === "") return null;
-    const d = new Date(String(v));
+    let s = String(v);
+    // DB timestamps often arrive offset-less ("2026-07-14 09:00:00"); the
+    // ETL stores UTC, so parse them as UTC — otherwise every "ago" value is
+    // skewed by the viewer's UTC offset.
+    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) {
+      s = s.replace(" ", "T") + "Z";
+    }
+    const d = new Date(s);
     if (isNaN(d.getTime())) return null;
     const sec = (Date.now() - d.getTime()) / 1000;
     if (sec < 0) return null;
