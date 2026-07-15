@@ -3,12 +3,16 @@ status distribution, mode/region/product volume, top lanes, weekly on-time
 trend. All single-pass GROUP BYs over the shipment table, windowed by
 injection date and cached, so the analytics page costs a handful of queries
 per TTL regardless of viewers."""
+import statistics
+from datetime import datetime
+
 from fastapi import APIRouter, Query
 
 from ..cache import cached
 from ..config import get_settings
 from ..db import fetch_all, fetch_one
 from ..analysis import quality as q
+from ..analysis.milestones import infer_mode, load_mappings
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 TTL = 120
@@ -170,3 +174,118 @@ async def _overview(window: int):
             "delivered": int(r["delivered"]), "on_time": int(r["on_time"]), "late": int(r["late"]),
         } for r in weekly],
     }
+
+
+# ---------------------------------------------------------------------------
+# milestone dwell-time — where time is lost between stages
+# ---------------------------------------------------------------------------
+def _to_dt(v):
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+@router.get("/dwell")
+async def dwell(window_days: int = Query(default=30, ge=1, le=180),
+                max_orders: int = Query(default=600, ge=50, le=1200)):
+    return await cached(f"an:dwell:{window_days}:{max_orders}", 300,
+                        lambda: _dwell(window_days, max_orders))
+
+
+async def _dwell(window: int, max_orders: int):
+    scope = _scope(window)
+    ships = await fetch_all(f"""
+        SELECT s.salesordernumber, s.carrier, s.modeoftransportation,
+               s.modeoftransportation_3a2, s.shipmenttype, s.transportmode_flight, s.flightnumber
+        FROM etl.shipment s
+        WHERE {scope} AND NULLIF(btrim(s.salesordernumber::text), '') IS NOT NULL
+        ORDER BY s.lastupdateddt DESC NULLS LAST
+        LIMIT {max_orders}
+    """)
+    if not ships:
+        return {"window_days": window, "transitions": [], "carriers": [], "orders": 0}
+
+    by_so = {str(sp["salesordernumber"]).strip(): sp for sp in ships}
+    so_list = list(by_so.keys())
+    events = await fetch_all(
+        """SELECT salesordernumber, carriername, "event", eventtimestamp
+           FROM etl.carrier_inbound
+           WHERE salesordernumber::text = ANY($1::text[]) AND eventtimestamp IS NOT NULL
+           ORDER BY salesordernumber, eventtimestamp ASC
+           LIMIT 40000""",
+        so_list,
+    )
+    grouped: dict[str, list] = {}
+    for e in events:
+        b = grouped.setdefault(str(e["salesordernumber"]).strip(), [])
+        if len(b) < 400:
+            b.append(e)
+
+    mappings = await load_mappings()
+    step_of: dict[str, int] = {}
+    transitions: dict[tuple, list] = {}
+    carrier_span: dict[str, list] = {}
+    orders_used = 0
+
+    for so, evs in grouped.items():
+        sp = by_so.get(so)
+        mode = infer_mode(sp)
+        carrier_disp = (str((sp or {}).get("carrier") or "").strip()
+                        or str(evs[0].get("carriername") or "").strip() or "(unknown)").upper()
+        cmap_mode = mappings.get(mode, {})
+        stage_ts: dict[str, tuple] = {}  # ui_milestone -> (step, earliest ts)
+        for e in evs:
+            cn = str(e.get("carriername") or (sp or {}).get("carrier") or "").strip().upper()
+            ev = str(e.get("event") or "").strip().lower()
+            info = cmap_mode.get(cn, {}).get(ev)
+            if not info:
+                continue
+            step, flag, ui = info.get("step"), info.get("flag"), info.get("ui_milestone")
+            if step is None or ui is None or (flag or 0) <= 0:
+                continue
+            ts = _to_dt(e.get("eventtimestamp"))
+            if not ts:
+                continue
+            step_of.setdefault(ui, step)
+            cur = stage_ts.get(ui)
+            if cur is None or ts < cur[1]:
+                stage_ts[ui] = (step, ts)
+
+        if len(stage_ts) < 2:
+            continue
+        orders_used += 1
+        ordered = sorted(stage_ts.items(), key=lambda kv: kv[1][0])
+        for (ua, (_sa, ta)), (ub, (_sb, tb)) in zip(ordered, ordered[1:]):
+            if tb <= ta:
+                continue
+            h = (tb - ta).total_seconds() / 3600.0
+            if h > 24 * 45:  # guard against absurd gaps from dirty timestamps
+                continue
+            transitions.setdefault((ua, ub), []).append(h)
+        span_h = (ordered[-1][1][1] - ordered[0][1][1]).total_seconds() / 3600.0
+        if 0 < span_h <= 24 * 45:
+            carrier_span.setdefault(carrier_disp, []).append(span_h)
+
+    out = []
+    for (a, b), vals in transitions.items():
+        out.append({
+            "from": a, "to": b, "label": f"{a} → {b}", "n": len(vals),
+            "avg_hours": round(statistics.mean(vals), 1),
+            "median_hours": round(statistics.median(vals), 1),
+            "max_hours": round(max(vals), 1),
+        })
+    out.sort(key=lambda t: step_of.get(t["from"], 99))
+
+    carriers = [{
+        "carrier": c, "orders": len(v),
+        "avg_span_hours": round(statistics.mean(v), 1),
+        "median_span_hours": round(statistics.median(v), 1),
+    } for c, v in carrier_span.items()]
+    carriers.sort(key=lambda c: -c["avg_span_hours"])
+
+    return {"window_days": window, "orders": orders_used, "transitions": out, "carriers": carriers}

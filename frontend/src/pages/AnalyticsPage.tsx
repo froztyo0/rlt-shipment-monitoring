@@ -17,6 +17,7 @@ export default function AnalyticsPage() {
   const [win, setWin] = useState(30);
   const carriers = useApi<Dict>(() => api("/api/analytics/carriers", { window_days: win }), [win]);
   const overview = useApi<Dict>(() => api("/api/analytics/overview", { window_days: win }), [win]);
+  const dwell = useApi<Dict>(() => api("/api/analytics/dwell", { window_days: win }), [win]);
 
   const t: Dict = overview.data?.totals ?? {};
   const carrierRows: Dict[] = carriers.data?.carriers ?? [];
@@ -183,6 +184,54 @@ export default function AnalyticsPage() {
               ))}
             </div>
           </>
+        )}
+      </Panel>
+
+      {/* ---- milestone dwell time ------------------------------------------ */}
+      <Panel title="Milestone dwell time — where time is spent between stages">
+        {dwell.loading ? (
+          <Spinner />
+        ) : dwell.error ? (
+          <ErrorBox error={dwell.error} />
+        ) : (dwell.data!.transitions ?? []).length === 0 ? (
+          <div className="py-4 text-sm text-ink-3">
+            Not enough carrier milestone timestamps in this window to compute stage dwell times.
+          </div>
+        ) : (
+          <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
+            <div>
+              <h3 className="mb-2 text-xs font-medium text-ink-2">
+                Average hours per stage transition ({dwell.data!.orders} orders)
+              </h3>
+              <HBarChart
+                items={(dwell.data!.transitions as Dict[]).map((t) => ({ label: t.label, value: t.avg_hours }))}
+                unit="h" color="var(--series-3)" labelWidth={230} valueDigits={0}
+              />
+            </div>
+            <div>
+              <h3 className="mb-2 text-xs font-medium text-ink-2">Carrier end-to-end event span</h3>
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="border-b border-baseline text-left text-xs text-ink-3">
+                    <th className="px-2 py-1">Carrier</th>
+                    <th className="px-2 py-1 text-right">Avg span</th>
+                    <th className="px-2 py-1 text-right">Median</th>
+                    <th className="px-2 py-1 text-right">Orders</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(dwell.data!.carriers as Dict[]).map((c) => (
+                    <tr key={c.carrier} className="border-b border-grid">
+                      <td className="whitespace-nowrap px-2 py-1.5 font-medium">{c.carrier}</td>
+                      <td className="tnum px-2 py-1.5 text-right">{c.avg_span_hours}h</td>
+                      <td className="tnum px-2 py-1.5 text-right text-ink-2">{c.median_span_hours}h</td>
+                      <td className="tnum px-2 py-1.5 text-right text-ink-3">{c.orders}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </Panel>
 

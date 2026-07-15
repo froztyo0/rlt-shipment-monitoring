@@ -3,6 +3,7 @@
 Everything here is set-based: lists of sales orders go into = ANY($1::text[])
 queries so a page render costs a handful of queries, not N+1.
 """
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -342,3 +343,125 @@ def _classify_stale(sp: dict, rome: Optional[dict], carrier: Optional[dict],
     if str(sp.get("actualdeparted") or "").strip() == "":
         return "never_departed", "No actual departure recorded"
     return "unexplained", "None of the standard causes matched — open the shipment for full RCA"
+
+
+# ---------------------------------------------------------------------------
+# injection-risk triage — the RLT deadline board
+# ---------------------------------------------------------------------------
+# RLT doses have a short half-life: the injection date/time is a hard deadline
+# and the vial expires. This ranks active shipments by how likely they are to
+# miss the injection (delivery ETA vs deadline) or arrive after vial expiry.
+def _naive_dt(v) -> Optional[datetime]:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.replace(tzinfo=None)
+    s = str(v).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        pass
+    m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    return None
+
+
+def _injection_deadline(date_v, time_v) -> Optional[datetime]:
+    d = _naive_dt(date_v)
+    if not d:
+        return None
+    if time_v:
+        m = re.search(r"(\d{1,2}):(\d{2})\s*([AaPp][Mm])?", str(time_v))
+        if m:
+            h, mn, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").upper()
+            if ap == "PM" and h < 12:
+                h += 12
+            elif ap == "AM" and h == 12:
+                h = 0
+            if 0 <= h <= 23 and 0 <= mn <= 59:
+                return d.replace(hour=h, minute=mn)
+    return d.replace(hour=12)  # default midday when no injection time is given
+
+
+_SEV_RANK = {"critical": 3, "serious": 2, "warning": 1, "info": 0}
+
+
+@router.get("/injection-risk")
+async def injection_risk(limit: int = Query(default=300, ge=1, le=600)):
+    return await cached(f"ops:injrisk:{limit}", 60, lambda: _compute_injection_risk(limit))
+
+
+async def _compute_injection_risk(limit: int):
+    rows = await fetch_all(f"""
+        SELECT s.salesordernumber, s.trackingnumber, s.product, s.carrier, s.region,
+               s.injectiondate, s.injectiontime, s.etadeliverytime, s.planneddeliverydate,
+               s.vialexpirationtime, s.currentmilestone, s.currentmilestonestep,
+               s.dosestatus, s.risk, s.riskbucket, s.modeoftransportation,
+               s.actualdeparted, s.lastgps, s.lastupdateddt
+        FROM etl.shipment s
+        WHERE {q.ACTIVE_SQL}
+          AND s.injectiondate ~ '^\\s*\\d{{4}}-\\d{{2}}-\\d{{2}}'
+          AND s.injectiondate::date BETWEEN CURRENT_DATE - 3 AND CURRENT_DATE + 21
+        ORDER BY s.injectiondate::date ASC, s.lastupdateddt DESC NULLS LAST
+        LIMIT {limit}
+    """)
+
+    now = datetime.now()
+    risk_items, on_track = [], 0
+    by_severity: dict[str, int] = {}
+    for r in rows:
+        deadline = _injection_deadline(r["injectiondate"], r["injectiontime"])
+        eta = _naive_dt(r["etadeliverytime"])
+        vial = _naive_dt(r["vialexpirationtime"])
+        slack_h = round((deadline - eta).total_seconds() / 3600.0, 1) if (deadline and eta) else None
+
+        if deadline is not None and deadline < now:
+            sev, verdict = "critical", "Injection time passed — not delivered"
+        elif eta is None:
+            sev, verdict = "warning", "No ETA — delivery cannot be projected"
+        elif vial is not None and eta > vial:
+            sev, verdict = "critical", "Delivery ETA is after vial expiry"
+        elif deadline is not None and eta > deadline:
+            sev, verdict = "critical", "Delivery ETA is after the injection deadline"
+        elif slack_h is not None and slack_h < 12:
+            sev, verdict = "serious", f"Tight — only {slack_h:.0f}h before injection"
+        elif slack_h is not None and slack_h < 24:
+            sev, verdict = "warning", f"Watch — {slack_h:.0f}h before injection"
+        else:
+            sev, verdict = "info", "On track"
+
+        if sev == "info":
+            on_track += 1
+            continue
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        risk_items.append({
+            "salesordernumber": r["salesordernumber"],
+            "trackingnumber": r["trackingnumber"],
+            "product": r["product"],
+            "carrier": r["carrier"],
+            "region": r["region"],
+            "modeoftransportation": r["modeoftransportation"],
+            "currentmilestone": r["currentmilestone"],
+            "injection_deadline": deadline.isoformat() if deadline else None,
+            "eta": eta.isoformat() if eta else None,
+            "vial_expiry": vial.isoformat() if vial else None,
+            "slack_hours": slack_h,
+            "severity": sev,
+            "verdict": verdict,
+        })
+
+    risk_items.sort(key=lambda x: (-_SEV_RANK[x["severity"]],
+                                   x["slack_hours"] if x["slack_hours"] is not None else 1e9))
+    return {
+        "checked": len(rows),
+        "at_risk": len(risk_items),
+        "on_track": on_track,
+        "by_severity": by_severity,
+        "items": risk_items,
+    }

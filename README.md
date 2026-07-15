@@ -170,6 +170,24 @@ copy-HTML, and CSV export of the raw flags. Sequence-related observations
 involved — a set-based generalization of the ops team's per-order check — so
 the carrier sees exactly which events to fix, not just a generic category.
 
+### Injection-risk triage (`/api/ops/injection-risk`, Ops → Injection risk)
+
+The RLT deadline board. Active shipments are ranked by **slack** — the gap
+between the projected delivery ETA and the injection deadline
+(`injectiondate` + `injectiontime`) — and cross-checked against **vial
+expiry**. Critical when the ETA lands after the deadline or after the vial
+expires (or the injection time has already passed undelivered), serious under
+12 h slack, watch under 24 h. Most-urgent first, so ops clears the top of the
+list. One bounded, cached query over `etl.shipment`.
+
+### Milestone dwell time (`/api/analytics/dwell`, Analytics)
+
+Replays recent carrier events against the milestone maps and reports the
+**average time-in-stage** for each transition (Pickup→Departed, airport dwell,
+flight, recovery, delivery drive), plus each carrier's end-to-end event span —
+so systemic bottlenecks (a carrier sitting 9 h at the airport) surface for the
+carrier conversation. Windowed, bounded, cached.
+
 ### Inbound feed health (`/api/feeds/health`)
 
 Every inbound/reject table is watched for **silence and irregular volume**:
@@ -203,6 +221,8 @@ fix inside geofence; `dist_threshold` or `DEFAULT_GEOFENCE_KM`) →
 | `GET /api/kpis/injections` | today/tomorrow/future dose status, on-time/late, air-road split |
 | `GET /api/analytics/carriers` | per-carrier performance: on-time %, transit time, cancel/issue rates |
 | `GET /api/analytics/overview` | status distribution, mode/region/product volume, top lanes, weekly trend |
+| `GET /api/ops/injection-risk` | active shipments ranked by slack (ETA vs injection deadline, vial expiry) |
+| `GET /api/analytics/dwell` | avg time-in-stage per milestone transition + carrier end-to-end span |
 | `POST /api/reports/carrier-issues` | on-demand carrier data-quality report (never auto-fetched) |
 | `POST /api/reports/carrier-issues/email` | carrier email draft: HTML + .eml (X-Unsent) |
 | `GET /api/shipments/filters` | dropdown values |

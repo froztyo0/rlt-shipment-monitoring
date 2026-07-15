@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, Dict, fmt } from "../api";
 import {
-  BarList, ErrorBox, Panel, SEV_COLOR, SeverityBadge, Spinner, useApi,
+  BarList, ErrorBox, KpiTile, Panel, SEV_COLOR, SEV_ICON, SeverityBadge, Spinner, useApi,
 } from "../components/ui";
 
-type Tab = "quality" | "sequence" | "stale" | "rejects";
+type Tab = "injrisk" | "quality" | "sequence" | "stale" | "rejects";
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: "injrisk", label: "Injection risk" },
   { id: "quality", label: "Data quality" },
   { id: "sequence", label: "Milestone sequence" },
   { id: "stale", label: "Overdue injections (RCA)" },
@@ -15,7 +16,7 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 export default function OpsPage() {
-  const [tab, setTab] = useState<Tab>("quality");
+  const [tab, setTab] = useState<Tab>("injrisk");
   const kpis = useApi<Dict>(() => api("/api/kpis"), []);
 
   return (
@@ -33,10 +34,96 @@ export default function OpsPage() {
           </button>
         ))}
       </div>
+      {tab === "injrisk" && <InjectionRiskTab />}
       {tab === "quality" && <QualityTab kpis={kpis.data} />}
       {tab === "sequence" && <SequenceTab />}
       {tab === "stale" && <StaleTab />}
       {tab === "rejects" && <RejectsTab kpis={kpis.data} />}
+    </div>
+  );
+}
+
+/* ---- injection risk triage ------------------------------------------------- */
+function InjectionRiskTab() {
+  const data = useApi<Dict>(() => api("/api/ops/injection-risk"), []);
+  if (data.loading) return <Spinner label="Ranking shipments by injection deadline…" />;
+  if (data.error) return <ErrorBox error={data.error} />;
+  const d = data.data!;
+  const items: Dict[] = d.items ?? [];
+  const sev = d.by_severity ?? {};
+
+  const fmtSlack = (h: number | null) =>
+    h == null ? "—" : h < 0 ? `${Math.round(h)}h over` : `${Math.round(h)}h`;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <KpiTile label="At risk" value={fmt.num(d.at_risk)} tone={d.at_risk > 0 ? "serious" : "good"}
+          sub="active, injection window" />
+        <KpiTile label="Will miss / overdue" value={fmt.num(sev.critical ?? 0)}
+          tone={(sev.critical ?? 0) > 0 ? "critical" : "good"} sub="ETA past deadline / vial" />
+        <KpiTile label="Tight (<12h)" value={fmt.num(sev.serious ?? 0)}
+          tone={(sev.serious ?? 0) > 0 ? "serious" : "good"} />
+        <KpiTile label="On track" value={fmt.num(d.on_track)} tone="good" sub={`of ${d.checked} checked`} />
+      </div>
+
+      <Panel title="Injection-risk queue — most urgent first">
+        <p className="mb-2 text-xs text-ink-3">
+          Active shipments ranked by slack between the projected delivery ETA and the injection
+          deadline, cross-checked against vial expiry. RLT doses can't wait — clear the top of this list first.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="border-b border-baseline text-left text-xs text-ink-3">
+                <th className="px-2 py-1">Tracking / SO</th>
+                <th className="px-2 py-1">Product</th>
+                <th className="px-2 py-1">Carrier</th>
+                <th className="px-2 py-1">Milestone</th>
+                <th className="px-2 py-1">Injection by</th>
+                <th className="px-2 py-1">ETA</th>
+                <th className="px-2 py-1">Vial expiry</th>
+                <th className="px-2 py-1 text-right">Slack</th>
+                <th className="px-2 py-1">Assessment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((r, i) => (
+                <tr key={i} className="border-b border-grid">
+                  <td className="whitespace-nowrap px-2 py-1.5">
+                    <Link className="font-medium text-s1 hover:underline"
+                      to={`/shipment/${encodeURIComponent(String(r.trackingnumber || r.salesordernumber))}`}>
+                      {r.trackingnumber || `SO ${r.salesordernumber}`}
+                    </Link>
+                  </td>
+                  <td className="max-w-[120px] truncate px-2 py-1.5">{fmt.text(r.product)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5">{fmt.text(r.carrier)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-ink-2">{fmt.text(r.currentmilestone)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.dt(r.injection_deadline)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 tnum text-ink-2">{fmt.dt(r.eta)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 tnum text-ink-2">{fmt.dt(r.vial_expiry)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-right tnum"
+                    style={{ color: r.slack_hours != null && r.slack_hours < 0 ? SEV_COLOR.critical
+                      : r.slack_hours != null && r.slack_hours < 12 ? SEV_COLOR.serious : undefined }}>
+                    {fmtSlack(r.slack_hours)}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs">
+                      <span style={{ color: SEV_COLOR[r.severity] }}>{SEV_ICON[r.severity]}</span>
+                      {r.verdict}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {items.length === 0 && (
+                <tr><td colSpan={9} className="px-2 py-6 text-center text-sm" style={{ color: "var(--status-good)" }}>
+                  ✓ No shipments at risk of missing injection in the window.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
     </div>
   );
 }
