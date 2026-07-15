@@ -105,13 +105,14 @@ function MovingPlane({ from, to }: { from: LL; to: LL }) {
 }
 
 export default function ShipmentMap({
-  data, layers, visibleCount, delivered = false, roadMode = false,
+  data, layers, visibleCount, delivered = false, roadMode = false, radar = false,
 }: {
   data: PingsResponse;
   layers?: Partial<MapLayers>;
   visibleCount?: number | null;
   delivered?: boolean;
   roadMode?: boolean;
+  radar?: boolean;
 }) {
   const dark = useIsDark();
   const L_ = { ...ALL_LAYERS, ...(layers ?? {}) };
@@ -204,7 +205,8 @@ export default function ShipmentMap({
   const currentLabel = delivered ? "delivered" : roadMode ? "on road" : "current";
 
   return (
-    <MapContainer bounds={bounds} className="h-[480px] w-full rounded-md" scrollWheelZoom>
+    <div className={`relative h-[480px] w-full ${radar ? "radar-map" : ""}`}>
+    <MapContainer bounds={bounds} className="h-full w-full rounded-md" scrollWheelZoom>
       <TileLayer
         key={dark ? "dark" : "light"}
         attribution='&copy; <a href="https://carto.com/">CARTO</a> · &copy; OpenStreetMap'
@@ -310,5 +312,39 @@ export default function ShipmentMap({
         </Marker>
       )}
     </MapContainer>
+      {radar && <RadarOverlay data={data} delivered={delivered} airborne={!!flight} lastClean={lastClean} />}
+    </div>
+  );
+}
+
+/* ---- ATC / radar HUD overlay ---------------------------------------------- */
+function RadarOverlay({ data, delivered, airborne, lastClean }: {
+  data: PingsResponse; delivered: boolean; airborne: boolean; lastClean?: any;
+}) {
+  const contacts = data.pings.filter((p) => !p.ghost && plottable(p.lat, p.lon)).length;
+  const state = delivered ? "ARRIVED" : airborne ? "AIRBORNE" : "IN TRANSIT";
+  const pos = lastClean ? `${lastClean.lat?.toFixed(3)} ${lastClean.lon?.toFixed(3)}` : "-- --";
+  const tn = data.trackingnumber ?? data.salesordernumber ?? "UNKNOWN";
+  return (
+    <div className="radar-overlay">
+      <div className="sweep" />
+      {[86, 58, 30].map((w) => (
+        <div key={w} className="ring" style={{ width: `${w}%` }} />
+      ))}
+      <div className="cross-h" /><div className="cross-v" />
+      <div className="scanlines" /><div className="vignette" />
+      <div className="radar-hud" style={{ top: 8, left: 10 }}>
+        {`◈ RLT RADAR  //  ${state}`}
+      </div>
+      <div className="radar-hud" style={{ top: 8, right: 10, textAlign: "right" }}>
+        {`TRK ${tn}\nCONTACTS ${contacts}`}
+      </div>
+      <div className="radar-hud" style={{ bottom: 8, left: 10 }}>
+        {`LKP ${pos}`}
+      </div>
+      <div className="radar-hud" style={{ bottom: 8, right: 10, textAlign: "right" }}>
+        {airborne ? "FLIGHT TRACKED" : delivered ? "TARGET REACHED" : "GND CONTACT"}
+      </div>
+    </div>
   );
 }

@@ -24,6 +24,7 @@ export default function ShipmentDetailPage() {
     trail: true, pings: true, ghosts: true, airports: true, planned: true,
   });
   const [scrub, setScrub] = useState<number | null>(null); // null = show all pings
+  const [radar, setRadar] = useState(() => new URLSearchParams(window.location.search).get("radar") === "1");
 
   const detail = useApi<Dict>(
     () => api(`/api/shipments/${enc(tracking)}/detail`, so ? { so } : undefined),
@@ -177,12 +178,13 @@ export default function ShipmentDetailPage() {
             </div>
           ) : (
             <>
-              <MapControls layers={mapLayers} setLayers={setMapLayers} data={pings.data!} />
+              <MapControls layers={mapLayers} setLayers={setMapLayers} data={pings.data!}
+                radar={radar} setRadar={setRadar} />
               <div className="relative">
-                <ShipmentMap data={pings.data!} layers={mapLayers} visibleCount={scrub}
+                <ShipmentMap data={pings.data!} layers={mapLayers} visibleCount={scrub} radar={radar}
                   delivered={status.label === "Delivered" || status.label === "Cancelled"}
                   roadMode={/road|ground|truck|drive|courier/i.test(String(s.modeoftransportation ?? ""))} />
-                <TripStatsCard s={s} pings={pings.data!} />
+                {!radar && <TripStatsCard s={s} pings={pings.data!} />}
               </div>
               <PingScrubber pings={pings.data!} scrub={scrub} setScrub={setScrub} />
               <MapLegend summary={pings.data!.summary} />
@@ -445,9 +447,10 @@ function MilestoneStepper({ data }: { data: Dict }) {
   );
 }
 
-/* ---- map layer toggles ----------------------------------------------------- */
-function MapControls({ layers, setLayers, data }: {
+/* ---- map layer toggles + view switch --------------------------------------- */
+function MapControls({ layers, setLayers, data, radar, setRadar }: {
   layers: MapLayers; setLayers: (l: MapLayers) => void; data: PingsResponse;
+  radar: boolean; setRadar: (v: boolean) => void;
 }) {
   const opts: { key: keyof MapLayers; label: string; color: string; show: boolean }[] = [
     { key: "trail", label: "Actual trail", color: "var(--series-1)", show: true },
@@ -466,6 +469,17 @@ function MapControls({ layers, setLayers, data }: {
           {o.label}
         </label>
       ))}
+      <div className="ml-auto flex overflow-hidden rounded-md border border-edge text-xs">
+        {([["map", "Map"], ["radar", "Radar"]] as const).map(([v, label]) => {
+          const active = (v === "radar") === radar;
+          return (
+            <button key={v} onClick={() => setRadar(v === "radar")}
+              className={`px-2.5 py-1 ${active ? "bg-s1 text-white" : "text-ink-2 hover:text-ink"}`}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
