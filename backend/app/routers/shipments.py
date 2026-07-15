@@ -1,6 +1,7 @@
 """Shipment list (the bottom table) — one query, inline flag booleans,
 server-side filters + pagination, and a distinct-values endpoint for the
 filter dropdowns."""
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -39,6 +40,7 @@ def _build_where(
     ordertype: Optional[str], milestone: Optional[str], product: Optional[str],
     status: Optional[str], risk: Optional[str], flag: Optional[str],
     only_issues: bool, gps_h: int, args: list,
+    injection_from: Optional[date] = None, injection_to: Optional[date] = None,
 ) -> str:
     conds = ["TRUE"]
 
@@ -77,6 +79,16 @@ def _build_where(
         conds.append(q.flag_sql(flag, gps_h))
     if only_issues:
         conds.append(q.any_flag_sql(gps_h))
+    # injection window: blank injection dates stay visible — they're the
+    # data-quality rows the dashboard exists to surface
+    if injection_from:
+        conds.append(
+            f"(NULLIF(btrim(s.injectiondate::text),'') IS NULL OR s.injectiondate::date >= {bind(injection_from)})"
+        )
+    if injection_to:
+        conds.append(
+            f"(NULLIF(btrim(s.injectiondate::text),'') IS NULL OR s.injectiondate::date <= {bind(injection_to)})"
+        )
     return " AND ".join(conds)
 
 
@@ -92,6 +104,8 @@ async def list_shipments(
     risk: Optional[str] = None,
     flag: Optional[str] = None,
     only_issues: bool = False,
+    injection_from: Optional[date] = None,
+    injection_to: Optional[date] = None,
     sort: str = Query(default="lastupdateddt"),
     dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     page: int = Query(default=1, ge=1),
@@ -101,7 +115,8 @@ async def list_shipments(
     gps_h = s.gps_stale_hours
     args: list = []
     where = _build_where(search, carrier, region, ordertype, milestone, product,
-                         status, risk, flag, only_issues, gps_h, args)
+                         status, risk, flag, only_issues, gps_h, args,
+                         injection_from, injection_to)
     order_col = SORTABLE.get(sort, "s.lastupdateddt")
     order = f"{order_col} {'ASC' if dir == 'asc' else 'DESC'} NULLS LAST"
 

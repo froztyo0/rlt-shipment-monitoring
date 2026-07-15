@@ -73,6 +73,73 @@ async def _compute_kpis(window: int):
     }
 
 
+ARRIVED_SQL = "COALESCE(s.routestatus ILIKE '%arriv%', FALSE)"
+DEPARTED_SQL = "(NULLIF(btrim(s.actualdeparted::text),'') IS NOT NULL)"
+AT_RISK_SQL = (
+    "COALESCE(s.risk ILIKE '%high%' OR s.risk ILIKE '%critical%' "
+    "OR s.riskbucket ILIKE '%high%' OR s.riskbucket ILIKE '%critical%', FALSE)"
+)
+HAS_ALERTS_SQL = "(COALESCE(NULLIF(btrim(s.countofalerts::text),''),'0')::numeric > 0)"
+
+
+@router.get("/injections")
+async def injection_outlook(future_days: int = Query(default=30, ge=2, le=90)):
+    """Today / tomorrow / future injections with status %, on-time vs late,
+    critical & alert counts — overall and split by air vs road."""
+    return await cached(f"kpis:injections:{future_days}", KPI_TTL,
+                        lambda: _compute_injections(future_days))
+
+
+async def _compute_injections(future_days: int):
+    # status ladder is mutually exclusive in this order:
+    # cancelled > delivered > arrived (routestatus) > in transit (departed) > not started
+    delivered = f"({q.DELIVERED_SQL} AND NOT {q.CANCELLED_SQL})"
+    arrived = f"({ARRIVED_SQL} AND NOT {q.DELIVERED_SQL} AND NOT {q.CANCELLED_SQL})"
+    in_transit = f"({DEPARTED_SQL} AND NOT {ARRIVED_SQL} AND NOT {q.DELIVERED_SQL} AND NOT {q.CANCELLED_SQL})"
+    not_started = f"(NOT {DEPARTED_SQL} AND NOT {ARRIVED_SQL} AND NOT {q.DELIVERED_SQL} AND NOT {q.CANCELLED_SQL})"
+    # on-time = delivered on or before the planned delivery date (day precision)
+    on_time = (f"({delivered} AND NULLIF(btrim(s.planneddeliverydate::text),'') IS NOT NULL "
+               "AND s.actualdeliverytime::timestamp::date <= s.planneddeliverydate::date)")
+    late = (f"({delivered} AND NULLIF(btrim(s.planneddeliverydate::text),'') IS NOT NULL "
+            "AND s.actualdeliverytime::timestamp::date > s.planneddeliverydate::date)")
+
+    rows = await fetch_all(f"""
+        SELECT
+          CASE WHEN s.injectiondate::date = CURRENT_DATE THEN 'today'
+               WHEN s.injectiondate::date = CURRENT_DATE + 1 THEN 'tomorrow'
+               ELSE 'future' END AS bucket,
+          CASE WHEN {q.IS_AIR_SQL} THEN 'AIR' ELSE 'ROAD' END AS mode,
+          COUNT(*) AS total,
+          COUNT(*) FILTER (WHERE {q.CANCELLED_SQL}) AS cancelled,
+          COUNT(*) FILTER (WHERE {delivered}) AS delivered,
+          COUNT(*) FILTER (WHERE {arrived}) AS arrived,
+          COUNT(*) FILTER (WHERE {in_transit}) AS in_transit,
+          COUNT(*) FILTER (WHERE {not_started}) AS not_started,
+          COUNT(*) FILTER (WHERE {on_time}) AS on_time,
+          COUNT(*) FILTER (WHERE {late}) AS late,
+          COUNT(*) FILTER (WHERE {AT_RISK_SQL} AND NOT {q.TERMINAL_SQL}) AS critical,
+          COUNT(*) FILTER (WHERE {HAS_ALERTS_SQL}) AS with_alerts
+        FROM etl.shipment s
+        WHERE NULLIF(btrim(s.injectiondate::text),'') IS NOT NULL
+          AND s.injectiondate::date BETWEEN CURRENT_DATE AND CURRENT_DATE + {int(future_days)}
+        GROUP BY 1, 2
+    """)
+
+    counters = ["total", "cancelled", "delivered", "arrived", "in_transit",
+                "not_started", "on_time", "late", "critical", "with_alerts"]
+    empty = {c: 0 for c in counters}
+    out = {b: {**empty, "modes": {"AIR": dict(empty), "ROAD": dict(empty)}}
+           for b in ("today", "tomorrow", "future")}
+    for r in rows:
+        bucket = out[r["bucket"]]
+        mode = bucket["modes"][r["mode"]]
+        for c in counters:
+            v = int(r[c] or 0)
+            bucket[c] += v
+            mode[c] += v
+    return {"future_days": future_days, "buckets": out}
+
+
 @router.get("/alerts")
 async def alert_breakdown(window_days: int = Query(default=None, ge=1, le=90)):
     """Counts per alert title across active shipments (alertstitle can hold a

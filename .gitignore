@@ -12,3 +12,7 @@ backend/data/airport-codes.csv
 # node
 frontend/node_modules/
 frontend/dist/
+
+# TS incremental build cache
+frontend/*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo

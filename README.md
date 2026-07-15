@@ -106,6 +106,31 @@ shipment row):
   than they occurred (audit_timestamp vs eventtimestamp)
 - `duplicate_event`, `missed_steps` (delivered but phases never reported)
 
+### Injection outlook (`/api/kpis/injections`)
+
+Today / tomorrow / future (next 30 days) injections from `etl.shipment`, each
+with a mutually-exclusive status ladder — cancelled > delivered > arrived
+(`routestatus`) > in transit (departed) > not started — plus **on-time vs
+late** for delivered doses (day precision vs `planneddeliverydate`),
+critical-risk and open-alert counts, and an **air vs road** split.
+
+### Carrier issue report + email drafts (`/api/reports/...`, Reports page)
+
+The ops team's hand-run carrier-quality SQL, productized. Pick an injection
+window and carriers, hit **Run** (nothing is fetched automatically): latest
+non-cancelled ROME orders are replayed against carrier events and the
+expected milestone maps, producing ~40 issue flags per order (missing /
+unordered / after-delivery events, missing flight, POD, address fields, …)
+defined in `backend/app/carrier_config.py` alongside each carrier's
+delivery/cancellation event vocabulary. Results group into a per-carrier
+issue tracker; select issues and generate the carrier email — editable
+template (to/cc/subject/intro/signature, persisted locally), HTML preview,
+**.eml download** (opens in Outlook as an unsent draft via `X-Unsent`),
+copy-HTML, and CSV export of the raw flags. Sequence-related observations
+(missing / after-delivery / out-of-order) name the **specific carrier events**
+involved — a set-based generalization of the ops team's per-order check — so
+the carrier sees exactly which events to fix, not just a generic category.
+
 ### Inbound feed health (`/api/feeds/health`)
 
 Every inbound/reject table is watched for **silence and irregular volume**:
@@ -135,7 +160,10 @@ fix inside geofence; `dist_threshold` or `DEFAULT_GEOFENCE_KM`) →
 | `GET /api/kpis` | one-pass KPI aggregates + flag counts + reject counts |
 | `GET /api/feeds/health` | per-inbound-table silence / volume anomaly monitor |
 | `GET /api/kpis/alerts` | alert-title breakdown from `alertstitle` |
-| `GET /api/shipments` | paginated list, filters, inline flag booleans |
+| `GET /api/shipments` | paginated list, filters, inline flag booleans; `injection_from`/`injection_to` window (UI defaults to last 15 days) |
+| `GET /api/kpis/injections` | today/tomorrow/future dose status, on-time/late, air-road split |
+| `POST /api/reports/carrier-issues` | on-demand carrier data-quality report (never auto-fetched) |
+| `POST /api/reports/carrier-issues/email` | carrier email draft: HTML + .eml (X-Unsent) |
 | `GET /api/shipments/filters` | dropdown values |
 | `GET /api/shipments/{tn}/detail` | full row + issues + source traces + RCA + related orders (`?so=` to pick one) |
 | `GET /api/shipments/{tn}/pings` | pings merged & deduped across all SOs on the tracking number |

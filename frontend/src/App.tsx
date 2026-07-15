@@ -3,6 +3,7 @@ import { NavLink, Route, Routes, useParams } from "react-router-dom";
 import DashboardPage from "./pages/DashboardPage";
 import ShipmentDetailPage from "./pages/ShipmentDetailPage";
 import OpsPage from "./pages/OpsPage";
+import ReportsPage from "./pages/ReportsPage";
 
 // key by tracking number so per-shipment state (e.g. the selected sales
 // order) resets when navigating from one shipment straight to another
@@ -52,6 +53,9 @@ export default function App() {
             <NavLink to="/ops" className={navCls}>
               Ops Issues
             </NavLink>
+            <NavLink to="/reports" className={navCls}>
+              Reports
+            </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-3">
             <span className="text-xs text-ink-3">read-only · etl schema</span>
@@ -69,6 +73,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/ops" element={<OpsPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
           <Route path="/shipment/:tracking" element={<ShipmentDetailRoute />} />
         </Routes>
       </main>

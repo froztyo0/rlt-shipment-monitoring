@@ -49,7 +49,10 @@ CREATE TABLE etl.carrier_inbound (
   carrier_trackingid text, pod_signature text, pod_name text, id bigint,
   audit_timestamp timestamptz, tracking_url text, departure_airport_iata text,
   arrival_airport_iata text, departure_time text, arrival_time text, flight_details text,
-  delay_reason text, charter_flag text, shipment_type text
+  delay_reason text, charter_flag text, shipment_type text,
+  pickupcompany text, pickupcity text, pickupstate text, pickupzip text,
+  deliverycompany text, deliverycity text, deliverystate text, deliveryzip text,
+  pod_department text, pod_image text, pod_documents text
 );
 CREATE TABLE etl.carrier_inbound_rejects (
   salesordernumber text, carriername text, "event" text, event_description text,
@@ -82,7 +85,7 @@ CREATE TABLE etl.threeagesttwo_sales_inbound_fullload (
 );
 CREATE TABLE etl.threeagesttwo_batches_inbound (
   id bigint, batch_no text, sales_order_id text, batch_status text,
-  updatedt timestamptz, audit_timestamp timestamptz
+  mode_of_transport text, updatedt timestamptz, audit_timestamp timestamptz
 );
 CREATE TABLE etl.threeagesttwo_batches_inbound_fullload (
   id bigint, batch_no text, sales_order_id text, batch_status text,
@@ -215,6 +218,12 @@ INSERT INTO etl.rome_inbound_orders VALUES
  ('SO1006','ORD-6','In Transit','Open','Commercial',NULL,
   to_char(now() - interval '2 days','YYYY-MM-DD'), to_char(now() - interval '2 days','YYYY-MM-DD'),
   'SHIPPED', now() - interval '2 days', 6);
+INSERT INTO etl.rome_inbound_orders (salesordernumber, orderid, orderstatus, orderstatuscategory,
+  injectiondate, audit_timestamp, id)
+VALUES
+ ('SO1002','ORD-2','Confirmed','Open', to_char(now() + interval '2 days','YYYY-MM-DD'), now() - interval '1 day', 2),
+ ('SO1007','ORD-7','Confirmed','Open', to_char(now() + interval '1 day','YYYY-MM-DD'), now() - interval '5 hours', 7),
+ ('SO1003B','ORD-3B','In Transit','Open', to_char(now() - interval '3 days','YYYY-MM-DD'), now() - interval '2 days', 33);
 INSERT INTO etl.rome_inbound_rejects VALUES
  ('SO9001','ORD-9001','New','Open','Commercial',NULL,NULL,NULL,'NEW',
   now() - interval '2 hours', 901, 'deliveryaddressid not found in address master'),
@@ -294,8 +303,14 @@ VALUES
 -- ---- 3A GEST2 -------------------------------------------------------------------
 INSERT INTO etl.threeagesttwo_sales_inbound VALUES
  ('1','SO1002','ZAZ','PLV','ACC-9','Confirmed', now() - interval '2 days');
-INSERT INTO etl.threeagesttwo_batches_inbound VALUES
- (1,'B-777','SO1002','Released', now() - interval '1 day', now() - interval '1 day');
+INSERT INTO etl.threeagesttwo_batches_inbound
+  (id, batch_no, sales_order_id, batch_status, mode_of_transport, updatedt, audit_timestamp)
+VALUES
+ (1,  'B-777','SO1002','Released', NULL,   now() - interval '1 day',  now() - interval '1 day'),
+ (101,'B-101','SO1001','Released', 'AIR',  now() - interval '2 days', now() - interval '2 days'),
+ (103,'B-303','SO1003','Released', 'AIR',  now() - interval '3 days', now() - interval '3 days'),
+ (106,'B-606','SO1006','Released', 'AIR',  now() - interval '2 days', now() - interval '2 days'),
+ (107,'B-707','SO1007','Released', 'ROAD', now() - interval '1 day',  now() - interval '1 day');
 INSERT INTO etl.threeagesttwo_batches_inbound_fullload VALUES
  (1,'B-777','SO1002','Released', now() - interval '6 hours', now() - interval '6 hours'),
  (2,'B-999','SO1008','Released', now() - interval '6 hours', now() - interval '6 hours');

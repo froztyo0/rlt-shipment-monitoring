@@ -15,22 +15,33 @@ interface Filters {
   status: string;
   flag: string;
   only_issues: boolean;
+  injection_from: string;
+  injection_to: string;
   sort: string;
   dir: string;
   page: number;
 }
 
-const EMPTY: Filters = {
-  search: "", carrier: "", region: "", ordertype: "", product: "",
-  milestone: "", status: "", flag: "", only_issues: false,
-  sort: "lastupdateddt", dir: "desc", page: 1,
+const isoDaysAgo = (n: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
 };
 
+// default table window: injections from 15 days back through today
+const defaultFilters = (): Filters => ({
+  search: "", carrier: "", region: "", ordertype: "", product: "",
+  milestone: "", status: "", flag: "", only_issues: false,
+  injection_from: isoDaysAgo(15), injection_to: isoDaysAgo(0),
+  sort: "lastupdateddt", dir: "desc", page: 1,
+});
+
 export default function DashboardPage() {
-  const [f, setF] = useState<Filters>(EMPTY);
+  const [f, setF] = useState<Filters>(defaultFilters);
   const [searchDraft, setSearchDraft] = useState("");
 
   const kpis = useApi<Dict>(() => api("/api/kpis"), []);
+  const inj = useApi<Dict>(() => api("/api/kpis/injections"), []);
   const feeds = useApi<Dict>(() => api("/api/feeds/health"), []);
   const alerts = useApi<Dict>(() => api("/api/kpis/alerts"), []);
   const meta = useApi<Dict>(() => api("/api/shipments/filters"), []);
@@ -94,6 +105,21 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* ---- injection outlook -------------------------------------------- */}
+      <Panel title="Injection outlook — dose status by injection date">
+        {inj.loading ? (
+          <Spinner label="Loading injection outlook…" />
+        ) : inj.error ? (
+          <ErrorBox error={inj.error} />
+        ) : (
+          <div className="grid gap-3 lg:grid-cols-3">
+            <InjectionCard label="Today" data={inj.data!.buckets.today} />
+            <InjectionCard label="Tomorrow" data={inj.data!.buckets.tomorrow} />
+            <InjectionCard label={`Future (next ${inj.data!.future_days} days)`} data={inj.data!.buckets.future} />
+          </div>
+        )}
+      </Panel>
+
       {/* ---- inbound feed health ------------------------------------------ */}
       <Panel
         title="Inbound feed health — is data flowing?"
@@ -131,7 +157,7 @@ export default function DashboardPage() {
         title={`Shipments ${list.data ? `· ${list.data.total.toLocaleString()} match` : ""}`}
         right={
           f.flag || f.status || f.only_issues || f.search ? (
-            <button className="text-xs text-s1 hover:underline" onClick={() => { setSearchDraft(""); setF(EMPTY); }}>
+            <button className="text-xs text-s1 hover:underline" onClick={() => { setSearchDraft(""); setF(defaultFilters()); }}>
               clear filters
             </button>
           ) : undefined
@@ -184,6 +210,23 @@ export default function DashboardPage() {
             <input type="checkbox" checked={f.only_issues} onChange={(e) => set({ only_issues: e.target.checked })} />
             only flagged
           </label>
+          <span className="flex items-center gap-1 text-xs text-ink-3">
+            injection
+            <input type="date" value={f.injection_from}
+              onChange={(e) => set({ injection_from: e.target.value })}
+              className="rounded-md border border-edge bg-surface-0 px-1.5 py-1 text-xs text-ink-2" />
+            →
+            <input type="date" value={f.injection_to}
+              onChange={(e) => set({ injection_to: e.target.value })}
+              className="rounded-md border border-edge bg-surface-0 px-1.5 py-1 text-xs text-ink-2" />
+            {(f.injection_from || f.injection_to) && (
+              <button className="text-s1 hover:underline"
+                onClick={() => set({ injection_from: "", injection_to: "" })}
+                title="Remove the date window (loads across all dates)">
+                any date
+              </button>
+            )}
+          </span>
         </div>
 
         {list.loading ? (
@@ -202,6 +245,87 @@ export default function DashboardPage() {
           />
         )}
       </Panel>
+    </div>
+  );
+}
+
+/* ---- injection outlook card -------------------------------------------------- */
+const STATUS_SEGMENTS: { key: string; label: string; color: string }[] = [
+  { key: "delivered", label: "delivered", color: "var(--status-good)" },
+  { key: "arrived", label: "arrived", color: "var(--series-2)" },
+  { key: "in_transit", label: "in transit", color: "var(--series-1)" },
+  { key: "not_started", label: "not started", color: "var(--baseline)" },
+  { key: "cancelled", label: "cancelled", color: "var(--status-critical)" },
+];
+
+function StackedBar({ data, height = 14 }: { data: Dict; height?: number }) {
+  const total = Number(data.total) || 0;
+  if (!total) return <div className="h-[14px] rounded bg-grid opacity-40" style={{ height }} />;
+  return (
+    <div className="flex w-full overflow-hidden rounded-[4px]" style={{ height, gap: 2 }}>
+      {STATUS_SEGMENTS.filter((s) => Number(data[s.key]) > 0).map((s) => (
+        <div
+          key={s.key}
+          title={`${s.label}: ${data[s.key]} (${Math.round((data[s.key] / total) * 100)}%)`}
+          style={{ width: `${(Number(data[s.key]) / total) * 100}%`, background: s.color, minWidth: 3 }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function InjectionCard({ label, data }: { label: string; data: Dict }) {
+  const total = Number(data.total) || 0;
+  const pct = (n: number) => (total ? `${Math.round((n / total) * 100)}%` : "0%");
+  return (
+    <div className="rounded-lg border border-edge bg-surface-0/50 p-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs font-medium text-ink-2">{label}</span>
+        <span className="flex items-center gap-2 text-[11px]">
+          {Number(data.critical) > 0 && (
+            <span style={{ color: SEV_COLOR.critical }} title="active shipments with high/critical risk">
+              ⛔ {data.critical} critical
+            </span>
+          )}
+          {Number(data.with_alerts) > 0 && (
+            <span style={{ color: SEV_COLOR.warning }} title="shipments with open alerts">
+              ◆ {data.with_alerts} alerts
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="mt-1 text-2xl font-semibold">{total.toLocaleString()}<span className="ml-1.5 text-xs font-normal text-ink-3">injections</span></div>
+      <div className="mt-2"><StackedBar data={data} /></div>
+      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-ink-2">
+        {STATUS_SEGMENTS.map((s) => (
+          <span key={s.key} className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: s.color }} />
+            {s.label} <span className="tnum text-ink-3">{data[s.key]} ({pct(Number(data[s.key]))})</span>
+          </span>
+        ))}
+      </div>
+      {Number(data.delivered) > 0 && (
+        <div className="mt-1.5 text-[11px]">
+          <span style={{ color: "var(--delta-good)" }}>✓ {data.on_time} on time</span>
+          {Number(data.late) > 0 && (
+            <span className="ml-2" style={{ color: SEV_COLOR.serious }}>▲ {data.late} late</span>
+          )}
+          {Number(data.delivered) - Number(data.on_time) - Number(data.late) > 0 && (
+            <span className="ml-2 text-ink-3">
+              {Number(data.delivered) - Number(data.on_time) - Number(data.late)} no planned date
+            </span>
+          )}
+        </div>
+      )}
+      <div className="mt-2 flex flex-col gap-1 border-t border-grid pt-2">
+        {(["AIR", "ROAD"] as const).map((m) => (
+          <div key={m} className="grid grid-cols-[42px_34px_1fr] items-center gap-2">
+            <span className="text-[11px] text-ink-3">{m === "AIR" ? "✈ Air" : "▣ Road"}</span>
+            <span className="tnum text-right text-[11px] text-ink-2">{data.modes[m].total}</span>
+            <StackedBar data={data.modes[m]} height={8} />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import airports
 from .db import close_pool, fetch_val
-from .routers import feeds, kpis, ops, shipment_detail, shipments
+from .routers import feeds, kpis, ops, reports, shipment_detail, shipments
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("app")
@@ -34,6 +34,7 @@ app.add_middleware(
 # order matters: literal routes (e.g. /api/shipments/filters) before /{tracking}
 app.include_router(feeds.router)
 app.include_router(kpis.router)
+app.include_router(reports.router)
 app.include_router(shipments.router)
 app.include_router(shipment_detail.router)
 app.include_router(ops.router)
