@@ -406,7 +406,7 @@ async def _compute_injection_risk(limit: int):
                s.actualdeparted, s.lastgps, s.lastupdateddt
         FROM etl.shipment s
         WHERE {q.ACTIVE_SQL}
-          AND s.injectiondate ~ '^\\s*\\d{{4}}-\\d{{2}}-\\d{{2}}'
+          AND s.injectiondate::text ~ '^\\s*\\d{{4}}-\\d{{2}}-\\d{{2}}'
           AND s.injectiondate::date BETWEEN CURRENT_DATE - 3 AND CURRENT_DATE + 21
         ORDER BY s.injectiondate::date ASC, s.lastupdateddt DESC NULLS LAST
         LIMIT {limit}

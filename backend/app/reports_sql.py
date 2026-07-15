@@ -18,7 +18,9 @@ def build_carrier_issue_sql() -> str:
     delivery_bare = event_condition_sql("delivery", "")
 
     return f"""
-WITH latest_orders AS (
+-- MATERIALIZED + injection-window prefilter INSIDE the subquery so the window
+-- functions run over just the window's rows, not the whole ROME table.
+WITH latest_orders AS MATERIALIZED (
     SELECT *
     FROM (
         SELECT
@@ -31,10 +33,10 @@ WITH latest_orders AS (
                      THEN 1 ELSE 0 END)
                 OVER (PARTITION BY salesordernumber) AS has_cancelled
         FROM etl.rome_inbound_orders
+        WHERE injectiondate::date BETWEEN $1 AND $2
     ) t
     WHERE rn = 1
       AND has_cancelled = 0
-      AND injectiondate::date BETWEEN $1 AND $2
 ),
 
 latest_carrier AS (
@@ -59,15 +61,22 @@ latest_carrier AS (
 -- carriertrackingnumber (same source the dashboard/sales orders come from)
 carrier_tracking AS (
     SELECT lo.salesordernumber,
-           COALESCE(
-               (SELECT MAX(NULLIF(TRIM(c.carrier_trackingid::text), ''))
-                  FROM etl.carrier_inbound c
-                 WHERE c.salesordernumber::text = lo.salesordernumber::text),
-               (SELECT MAX(NULLIF(TRIM(sh.carriertrackingnumber::text), ''))
-                  FROM etl.shipment sh
-                 WHERE sh.salesordernumber::text = lo.salesordernumber::text)
-           ) AS carrier_trackingid
+           COALESCE(ci.tid, sh.tid) AS carrier_trackingid
     FROM latest_orders lo
+    LEFT JOIN (
+        SELECT c.salesordernumber,
+               MAX(NULLIF(TRIM(c.carrier_trackingid::text), '')) AS tid
+        FROM etl.carrier_inbound c
+        WHERE c.salesordernumber::text IN (SELECT salesordernumber::text FROM latest_orders)
+        GROUP BY c.salesordernumber
+    ) ci ON ci.salesordernumber::text = lo.salesordernumber::text
+    LEFT JOIN (
+        SELECT sh.salesordernumber,
+               MAX(NULLIF(TRIM(sh.carriertrackingnumber::text), '')) AS tid
+        FROM etl.shipment sh
+        WHERE sh.salesordernumber::text IN (SELECT salesordernumber::text FROM latest_orders)
+        GROUP BY sh.salesordernumber
+    ) sh ON sh.salesordernumber::text = lo.salesordernumber::text
 ),
 
 -- latest shipment-table mode per order (bounded to the window's orders)
@@ -460,15 +469,16 @@ def build_event_detail_sql() -> str:
     cancelled_bare = event_condition_sql("cancelled", "")
     delivery_bare = event_condition_sql("delivery", "")
     return f"""
-WITH latest_orders AS (
+WITH latest_orders AS MATERIALIZED (
     SELECT salesordernumber FROM (
         SELECT salesordernumber, injectiondate,
             ROW_NUMBER() OVER (PARTITION BY salesordernumber ORDER BY audit_timestamp DESC) AS rn,
             MAX(CASE WHEN UPPER(TRIM(orderstatus::text)) = 'CANCELLED' THEN 1 ELSE 0 END)
                 OVER (PARTITION BY salesordernumber) AS has_cancelled
         FROM etl.rome_inbound_orders
+        WHERE injectiondate::date BETWEEN $1 AND $2
     ) t
-    WHERE rn = 1 AND has_cancelled = 0 AND injectiondate::date BETWEEN $1 AND $2
+    WHERE rn = 1 AND has_cancelled = 0
 ),
 
 batch_latest AS (

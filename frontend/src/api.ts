@@ -79,6 +79,18 @@ export class ApiError extends Error {
   }
 }
 
+// Short-lived client cache: GET responses are memoized by URL for a few
+// seconds so navigating away and back (which unmounts/remounts pages) doesn't
+// refetch everything. It also de-dupes concurrent identical requests. Matches
+// the server-side aggregate TTLs; per-shipment data is fine at this staleness.
+const _apiCache = new Map<string, { t: number; p: Promise<any> }>();
+const API_CACHE_MS = 45_000;
+
+/** Drop cached GET responses (call after a mutation, if we ever add one). */
+export function clearApiCache() {
+  _apiCache.clear();
+}
+
 export async function api<T = Dict>(path: string, params?: Dict): Promise<T> {
   const url = new URL(path, window.location.origin);
   if (params) {
@@ -86,18 +98,33 @@ export async function api<T = Dict>(path: string, params?: Dict): Promise<T> {
       if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
     }
   }
-  const res = await fetch(url.toString().replace(window.location.origin, ""));
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = body.detail ?? JSON.stringify(body).slice(0, 300);
-    } catch {
-      /* keep statusText */
+  const rel = url.toString().replace(window.location.origin, "");
+
+  const now = Date.now();
+  const hit = _apiCache.get(rel);
+  if (hit && now - hit.t < API_CACHE_MS) return hit.p as Promise<T>;
+
+  const p = (async () => {
+    const res = await fetch(rel);
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json();
+        detail = body.detail ?? JSON.stringify(body).slice(0, 300);
+      } catch {
+        /* keep statusText */
+      }
+      throw new ApiError(res.status, detail);
     }
-    throw new ApiError(res.status, detail);
-  }
-  return res.json();
+    return res.json();
+  })();
+
+  _apiCache.set(rel, { t: now, p });
+  // never cache failures — evict so the next call retries
+  p.catch(() => {
+    if (_apiCache.get(rel)?.p === p) _apiCache.delete(rel);
+  });
+  return p;
 }
 
 /** Parse a possibly offset-less DB timestamp as UTC (matches fmt.ago). */

@@ -17,11 +17,13 @@ from ..analysis.milestones import infer_mode, load_mappings
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 TTL = 120
 
-# regex guards so a single non-ISO text value can't error a whole aggregate
-INJ_OK = r"(s.injectiondate ~ '^\s*\d{4}-\d{2}-\d{2}')"
-PLANNED_OK = r"(s.planneddeliverydate ~ '^\s*\d{4}-\d{2}-\d{2}')"
-DELIV_TS = r"(CASE WHEN s.actualdeliverytime ~ '^\s*\d{4}-\d{2}-\d{2}' THEN s.actualdeliverytime::timestamp END)"
-DEP_TS = r"(CASE WHEN s.actualdeparted ~ '^\s*\d{4}-\d{2}-\d{2}' THEN s.actualdeparted::timestamp END)"
+# regex guards so a single non-ISO text value can't error a whole aggregate.
+# cast ::text first — on real RDS these columns are date/timestamp types and
+# the ~ operator only exists for text.
+INJ_OK = r"(s.injectiondate::text ~ '^\s*\d{4}-\d{2}-\d{2}')"
+PLANNED_OK = r"(s.planneddeliverydate::text ~ '^\s*\d{4}-\d{2}-\d{2}')"
+DELIV_TS = r"(CASE WHEN s.actualdeliverytime::text ~ '^\s*\d{4}-\d{2}-\d{2}' THEN s.actualdeliverytime::timestamp END)"
+DEP_TS = r"(CASE WHEN s.actualdeparted::text ~ '^\s*\d{4}-\d{2}-\d{2}' THEN s.actualdeparted::timestamp END)"
 
 ARRIVED = "COALESCE(s.routestatus ILIKE '%arriv%', FALSE)"
 DEPARTED = "(NULLIF(btrim(s.actualdeparted::text),'') IS NOT NULL)"
