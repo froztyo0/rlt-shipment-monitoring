@@ -25,7 +25,10 @@ function useIsDark(): boolean {
 
 /* ---- minimal icons -------------------------------------------------------- */
 // clean filled dot; optional live pulse ring
-const dotIcon = (color: string, pulse = false, size = 12) =>
+const SHADOW = "filter:drop-shadow(0 1px 2px rgba(0,0,0,.55))";
+
+// clean filled dot (used for GPS pings / origin)
+const dotIcon = (color: string, pulse = false, size = 13) =>
   L.divIcon({
     className: "",
     html: `<div style="position:relative;width:${size}px;height:${size}px">
@@ -36,24 +39,66 @@ const dotIcon = (color: string, pulse = false, size = 12) =>
     iconAnchor: [size / 2, size / 2],
   });
 
-// small rotated aircraft triangle (points along heading), no background chrome
+// top-down aircraft silhouette, rotated to heading
 const planeIcon = (rotate: number) =>
   L.divIcon({
     className: "",
-    html: `<svg width="22" height="22" viewBox="0 0 24 24" style="transform:rotate(${rotate}deg);overflow:visible">
-      <path d="M12 2 L19 20 L12 15.5 L5 20 Z" fill="var(--series-5)" stroke="var(--surface-1)" stroke-width="1.2" stroke-linejoin="round"/>
+    html: `<svg width="30" height="30" viewBox="0 0 24 24" style="transform:rotate(${rotate}deg);${SHADOW}">
+      <path d="M12 2c.8 0 1.3.9 1.3 2.7V9l7.2 4.2v1.9l-7.2-2v3.9l2 1.4v1.5L12 20.4 8.7 21.8v-1.5l2-1.4v-3.9l-7.2 2v-1.9L10.7 9V4.7C10.7 2.9 11.2 2 12 2z"
+        fill="var(--series-5)" stroke="#fff" stroke-width="0.7" stroke-linejoin="round"/>
     </svg>`,
-    iconSize: [22, 22],
-    iconAnchor: [11, 11],
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
   });
 
-// small diamond for an airport node
+// delivery-truck silhouette (current ground position)
+const truckIcon = (color: string, pulse = true) =>
+  L.divIcon({
+    className: "",
+    html: `<div style="position:relative;width:32px;height:32px;display:flex;align-items:center;justify-content:center">
+      ${pulse ? `<span class="map-pulse-ring" style="position:absolute;left:9px;top:9px;width:14px;height:14px;border-radius:9999px;background:${color}"></span>` : ""}
+      <svg width="27" height="27" viewBox="0 0 24 24" style="${SHADOW};position:relative">
+        <rect x="1.5" y="6.5" width="12" height="8.5" rx="1" fill="${color}" stroke="#fff" stroke-width="0.8"/>
+        <path d="M13.5 9h3.7l2.8 2.8V15h-6.5z" fill="${color}" stroke="#fff" stroke-width="0.8" stroke-linejoin="round"/>
+        <circle cx="6" cy="16.8" r="2.4" fill="#141414" stroke="#fff" stroke-width="1"/>
+        <circle cx="16" cy="16.8" r="2.4" fill="#141414" stroke="#fff" stroke-width="1"/>
+      </svg>
+    </div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  });
+
+// airport: violet rounded badge with a plane glyph
 const airportIcon = L.divIcon({
   className: "",
-  html: `<span style="display:block;width:9px;height:9px;background:var(--series-5);
-    border:1.5px solid var(--surface-1);transform:rotate(45deg)"></span>`,
-  iconSize: [11, 11],
-  iconAnchor: [5.5, 5.5],
+  html: `<div style="width:22px;height:22px;background:var(--series-5);border-radius:5px;
+    display:flex;align-items:center;justify-content:center;border:1.5px solid var(--surface-1);${SHADOW}">
+    <svg width="14" height="14" viewBox="0 0 24 24"><path d="M12 3c.6 0 1 .8 1 2.2V9l6 3.5v1.5l-6-1.7v3.3l1.6 1.2v1.2L12 17.7 9.4 18.2v-1.2L11 15.8v-3.3l-6 1.7V12.5L11 9V5.2C11 3.8 11.4 3 12 3z" fill="#fff"/></svg>
+  </div>`,
+  iconSize: [22, 22],
+  iconAnchor: [11, 11],
+});
+
+// destination: red map pin (tip anchored at the location)
+const destIcon = L.divIcon({
+  className: "",
+  html: `<svg width="26" height="34" viewBox="0 0 24 32" style="${SHADOW}">
+    <path d="M12 1C6.9 1 3 5 3 10c0 6.6 9 21 9 21s9-14.4 9-21c0-5-3.9-9-9-9z"
+      fill="var(--status-critical)" stroke="#fff" stroke-width="1"/>
+    <circle cx="12" cy="10" r="3.4" fill="#fff"/>
+  </svg>`,
+  iconSize: [26, 34],
+  iconAnchor: [13, 32],
+});
+
+// delivered: green check badge
+const deliveredIcon = L.divIcon({
+  className: "",
+  html: `<div style="width:24px;height:24px;background:var(--status-good);border-radius:9999px;
+    display:flex;align-items:center;justify-content:center;border:2px solid var(--surface-1);${SHADOW};
+    color:#fff;font-size:14px;font-weight:700;line-height:1">✓</div>`,
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
 });
 
 export const plottable = (lat: number | null, lon: number | null) =>
@@ -195,11 +240,12 @@ export default function ShipmentMap({
     ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
     : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
 
-  // current-position marker (minimal): pulsing dot while in transit, solid on delivery
+  // current-position marker: truck on the ground, ✓ when delivered
+  // (airborne is handled by the animated MovingPlane)
   const currentMarker = (() => {
-    if (!lastClean || flight) return null; // airborne handled by MovingPlane
-    if (delivered) return dotIcon("var(--status-good)", false, 13);
-    return dotIcon(roadMode ? "var(--series-4)" : "var(--series-1)", true, 13);
+    if (!lastClean || flight) return null;
+    if (delivered) return deliveredIcon;
+    return truckIcon(roadMode ? "var(--series-4)" : "var(--series-1)", true);
   })();
   const currentLabel = delivered ? "delivered" : roadMode ? "on road" : "current";
 
@@ -298,14 +344,14 @@ export default function ShipmentMap({
       ))}
 
       {data.origin.lat != null && (
-        <Marker position={[data.origin.lat, data.origin.lon!]} icon={dotIcon("var(--series-4)", false, 12)}>
-          <Tooltip direction="right" offset={[6, 0]} className="map-label">Origin</Tooltip>
+        <Marker position={[data.origin.lat, data.origin.lon!]} icon={dotIcon("var(--series-4)", false, 15)}>
+          <Tooltip direction="right" offset={[7, 0]} className="map-label">Origin</Tooltip>
           <Popup><b>{data.origin.name}</b><br />{data.origin.address}</Popup>
         </Marker>
       )}
       {data.destination.lat != null && (
-        <Marker position={[data.destination.lat, data.destination.lon!]} icon={dotIcon("var(--status-critical)", false, 12)}>
-          <Tooltip direction="right" offset={[6, 0]} className="map-label">Destination</Tooltip>
+        <Marker position={[data.destination.lat, data.destination.lon!]} icon={destIcon}>
+          <Tooltip direction="right" offset={[8, -10]} className="map-label">Destination</Tooltip>
           <Popup><b>{data.destination.name}</b><br />{data.destination.address}</Popup>
         </Marker>
       )}

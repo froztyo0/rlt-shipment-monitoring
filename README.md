@@ -128,7 +128,8 @@ Click any tracking number to open the detail view: a header status pill + a
 time-to-injection countdown, on-time projection), a **horizontal milestone
 stepper** (current step, per-step timestamps, time-in-stage), the map (Carto
 basemap, theme-aware) with **layer toggles** (actual trail / planned route /
-pings / ghosts / airports), a **replay scrubber**, minimal markers, and an
+pings / ghosts / airports), a **replay scrubber**, distinct markers (aircraft
+silhouette, airport badge, delivery-truck current position, destination pin), and an
 **animated aircraft** that tracks a predicted in-flight position along the
 departure→arrival path while the shipment is airborne, the per-SO milestone
 panel, and an **order
