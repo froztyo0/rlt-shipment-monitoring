@@ -27,53 +27,43 @@ REJECT_TABLES = {
                   "salesordernumber, tripid, deviceserialnumber, error_message, audit_timestamp"),
 }
 
-# per-flag upstream existence probes (LATERAL EXISTS keeps it one round trip)
-TRACE_PROBES: dict[str, list[tuple[str, str]]] = {
+# per-flag upstream existence probes: (name, table, key column, extra condition).
+# Run set-based over the returned sales orders (one bounded query per probe),
+# NOT as a correlated EXISTS per row — the latter seq-scanned big tables ~100x
+# and timed out on real data. `in_3a2_sales` also matches salesordernumber_3a2.
+TRACE_PROBES: dict[str, list[tuple[str, str, str, Optional[str]]]] = {
     "missing_batch": [
-        ("in_batches_inbound",
-         "SELECT 1 FROM etl.threeagesttwo_batches_inbound b WHERE b.sales_order_id::text = s.salesordernumber::text AND NULLIF(btrim(b.batch_no::text),'') IS NOT NULL"),
-        ("in_batches_fullload",
-         "SELECT 1 FROM etl.threeagesttwo_batches_inbound_fullload b WHERE b.sales_order_id::text = s.salesordernumber::text AND NULLIF(btrim(b.batch_no::text),'') IS NOT NULL"),
+        ("in_batches_inbound", "etl.threeagesttwo_batches_inbound", "sales_order_id",
+         "NULLIF(btrim(batch_no::text),'') IS NOT NULL"),
+        ("in_batches_fullload", "etl.threeagesttwo_batches_inbound_fullload", "sales_order_id",
+         "NULLIF(btrim(batch_no::text),'') IS NOT NULL"),
     ],
     "missing_carrier": [
-        ("in_carrier_inbound",
-         "SELECT 1 FROM etl.carrier_inbound c WHERE c.salesordernumber::text = s.salesordernumber::text"),
-        ("in_carrier_rejects",
-         "SELECT 1 FROM etl.carrier_inbound_rejects c WHERE c.salesordernumber::text = s.salesordernumber::text"),
+        ("in_carrier_inbound", "etl.carrier_inbound", "salesordernumber", None),
+        ("in_carrier_rejects", "etl.carrier_inbound_rejects", "salesordernumber", None),
     ],
     "no_sensitech_data": [
-        ("in_sensitech_trip",
-         "SELECT 1 FROM etl.sensitech_inbound_trip t WHERE t.salesordernumber::text = s.salesordernumber::text"),
-        ("in_sensitech_rejects",
-         "SELECT 1 FROM etl.sensitech_inbound_rejects t WHERE t.salesordernumber::text = s.salesordernumber::text"),
+        ("in_sensitech_trip", "etl.sensitech_inbound_trip", "salesordernumber", None),
+        ("in_sensitech_rejects", "etl.sensitech_inbound_rejects", "salesordernumber", None),
     ],
     "gps_stale": [
-        ("in_sensitech_trip",
-         "SELECT 1 FROM etl.sensitech_inbound_trip t WHERE t.salesordernumber::text = s.salesordernumber::text"),
-        ("in_sensitech_rejects",
-         "SELECT 1 FROM etl.sensitech_inbound_rejects t WHERE t.salesordernumber::text = s.salesordernumber::text"),
+        ("in_sensitech_trip", "etl.sensitech_inbound_trip", "salesordernumber", None),
+        ("in_sensitech_rejects", "etl.sensitech_inbound_rejects", "salesordernumber", None),
     ],
     "missing_planned_delivery": [
-        ("in_rome_inbound",
-         "SELECT 1 FROM etl.rome_inbound_orders r WHERE r.salesordernumber::text = s.salesordernumber::text"),
-        ("in_rome_rejects",
-         "SELECT 1 FROM etl.rome_inbound_rejects r WHERE r.salesordernumber::text = s.salesordernumber::text"),
+        ("in_rome_inbound", "etl.rome_inbound_orders", "salesordernumber", None),
+        ("in_rome_rejects", "etl.rome_inbound_rejects", "salesordernumber", None),
     ],
     "upstream_silent_rome": [
-        ("in_rome_inbound",
-         "SELECT 1 FROM etl.rome_inbound_orders r WHERE r.salesordernumber::text = s.salesordernumber::text"),
-        ("in_rome_rejects",
-         "SELECT 1 FROM etl.rome_inbound_rejects r WHERE r.salesordernumber::text = s.salesordernumber::text"),
+        ("in_rome_inbound", "etl.rome_inbound_orders", "salesordernumber", None),
+        ("in_rome_rejects", "etl.rome_inbound_rejects", "salesordernumber", None),
     ],
     "upstream_silent_3a2": [
-        ("in_3a2_sales",
-         "SELECT 1 FROM etl.threeagesttwo_sales_inbound t WHERE t.sales_order_id::text = s.salesordernumber::text OR t.sales_order_id::text = s.salesordernumber_3a2::text"),
+        ("in_3a2_sales", "etl.threeagesttwo_sales_inbound", "sales_order_id", None),
     ],
     "upstream_silent_carrier": [
-        ("in_carrier_inbound",
-         "SELECT 1 FROM etl.carrier_inbound c WHERE c.salesordernumber::text = s.salesordernumber::text"),
-        ("in_carrier_rejects",
-         "SELECT 1 FROM etl.carrier_inbound_rejects c WHERE c.salesordernumber::text = s.salesordernumber::text"),
+        ("in_carrier_inbound", "etl.carrier_inbound", "salesordernumber", None),
+        ("in_carrier_rejects", "etl.carrier_inbound_rejects", "salesordernumber", None),
     ],
 }
 
@@ -88,24 +78,43 @@ async def data_quality(flag: str, limit: int = Query(default=100, ge=1, le=300))
 
 async def _compute_data_quality(flag: str, limit: int):
     s = get_settings()
-    probes = TRACE_PROBES.get(flag, [])
-    probe_cols = "".join(f", EXISTS ({sql}) AS {name}" for name, sql in probes)
     rows = await fetch_all(f"""
-        SELECT s.trackingnumber, s.salesordernumber, s.product, s.carrier,
-               s.region, s.currentmilestone, s.injectiondate,
+        SELECT s.trackingnumber, s.salesordernumber, s.salesordernumber_3a2, s.product,
+               s.carrier, s.region, s.currentmilestone, s.injectiondate,
                s.planneddeliverydate, s.lastupdateddt, s.batchnumber
-               {probe_cols}
         FROM etl.shipment s
         WHERE {q.flag_sql(flag, s.gps_stale_hours)}
         ORDER BY s.lastupdateddt DESC NULLS LAST
         LIMIT {limit}
     """)
-    probe_names = [name for name, _ in probes]
+    probes = TRACE_PROBES.get(flag, [])
+    ids = sorted({
+        v for r in rows
+        for v in (str(r.get("salesordernumber") or "").strip(),
+                  str(r.get("salesordernumber_3a2") or "").strip())
+        if v
+    })
+    # one bounded lookup per probe → the set of ids that exist in that source
+    present: dict[str, set] = {}
+    if ids:
+        for name, table, key_col, cond in probes:
+            where = f"{key_col}::text = ANY($1::text[])" + (f" AND {cond}" if cond else "")
+            got = await fetch_all(
+                f"SELECT DISTINCT {key_col}::text AS k FROM {table} WHERE {where}", ids)
+            present[name] = {str(x["k"]).strip() for x in got if x["k"] is not None}
+
+    cols = ["trackingnumber", "salesordernumber", "product", "carrier", "region",
+            "currentmilestone", "injectiondate", "planneddeliverydate", "lastupdateddt", "batchnumber"]
     items = []
     for r in rows:
-        upstream = {name: bool(r.pop(name, False)) for name in probe_names}
-        diagnosis = _diagnose(flag, upstream)
-        items.append({**r, "upstream": upstream, "diagnosis": diagnosis})
+        so = str(r.get("salesordernumber") or "").strip()
+        so3 = str(r.get("salesordernumber_3a2") or "").strip()
+        upstream = {}
+        for name, _t, _k, _c in probes:
+            cand = {so, so3} if name == "in_3a2_sales" else {so}
+            upstream[name] = bool((cand - {""}) & present.get(name, set()))
+        items.append({**{k: r.get(k) for k in cols},
+                      "upstream": upstream, "diagnosis": _diagnose(flag, upstream)})
     return {"flag": flag, "meta": q.FLAG_META[flag], "items": items}
 
 
