@@ -40,11 +40,15 @@ ACTIVE_SQL = f"(NOT {TERMINAL_SQL})"
 
 COL_3A2_STATUS = 's."3agest2_status"'
 
+# Air is decided from the shipment's mode-of-transport columns only — NOT from
+# flightnumber presence. Using flightnumber was circular: an Air order missing
+# its flight number wouldn't be seen as Air, so "Air shipment w/o flight number"
+# would never fire (or would mis-mark Road orders). Mirrors the report's
+# transport_type logic.
 IS_AIR_SQL = (
-    f"COALESCE({not_blank('s.transportmode_flight')} "
-    "OR s.modeoftransportation ILIKE '%air%' "
+    "COALESCE(s.modeoftransportation ILIKE '%air%' "
     "OR s.modeoftransportation ILIKE '%flight%' "
-    f"OR {not_blank('s.flightnumber')}, FALSE)"
+    "OR s.modeoftransportation_3a2 ILIKE '%air%', FALSE)"
 )
 
 # name -> (sql, severity, label, what it means / where we go digging)

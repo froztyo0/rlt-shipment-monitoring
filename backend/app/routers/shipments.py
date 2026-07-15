@@ -82,16 +82,17 @@ def _build_where(
         conds.append(q.flag_sql(flag, gps_h))
     if only_issues:
         conds.append(q.any_flag_sql(gps_h))
-    # injection window: blank injection dates stay visible — they're the
-    # data-quality rows the dashboard exists to surface
+    # injection window: bound the table to recent injections so we don't pull
+    # the whole shipment table. Strict — rows without a usable injection date
+    # are excluded from the windowed view; clearing the window ("any date")
+    # shows everything. CASE guard keeps the ::date cast safe on real date
+    # columns and dirty text alike.
+    inj_date = ("(CASE WHEN s.injectiondate::text ~ '^\\s*\\d{4}-\\d{2}-\\d{2}' "
+                "THEN s.injectiondate::date END)")
     if injection_from:
-        conds.append(
-            f"(NULLIF(btrim(s.injectiondate::text),'') IS NULL OR s.injectiondate::date >= {bind(injection_from)})"
-        )
+        conds.append(f"{inj_date} >= {bind(injection_from)}")
     if injection_to:
-        conds.append(
-            f"(NULLIF(btrim(s.injectiondate::text),'') IS NULL OR s.injectiondate::date <= {bind(injection_to)})"
-        )
+        conds.append(f"{inj_date} <= {bind(injection_to)}")
     return " AND ".join(conds)
 
 

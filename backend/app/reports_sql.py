@@ -45,16 +45,8 @@ WITH latest_orders AS MATERIALIZED (
             WHERE UPPER(TRIM(ci.carriername::text)) = ANY($3)))
 ),
 
--- Scan the big carrier_inbound table ONCE into the window's orders, then
--- derive everything below from this small materialized subset. Without an
--- index on carrier_inbound(salesordernumber) the original query seq-scanned
--- the whole table many times (plus a correlated EXISTS per order) → timeout.
-carrier_events AS MATERIALIZED (
-    SELECT *
-    FROM etl.carrier_inbound
-    WHERE salesordernumber::text IN (SELECT salesordernumber::text FROM latest_orders)
-),
-
+-- bound to the window's orders so ROW_NUMBER doesn't sort the ENTIRE
+-- carrier_inbound table on every run (this was the main report timeout)
 latest_carrier AS (
     SELECT salesordernumber, carriername, carrier_trackingid
     FROM (
@@ -66,8 +58,9 @@ latest_carrier AS (
                 PARTITION BY salesordernumber
                 ORDER BY audit_timestamp DESC
             ) AS rn
-        FROM carrier_events
+        FROM etl.carrier_inbound
         WHERE NULLIF(TRIM(carriername::text), '') IS NOT NULL
+          AND salesordernumber::text IN (SELECT salesordernumber::text FROM latest_orders)
     ) t
     WHERE rn = 1
 ),
@@ -82,7 +75,8 @@ carrier_tracking AS (
     LEFT JOIN (
         SELECT c.salesordernumber,
                MAX(NULLIF(TRIM(c.carrier_trackingid::text), '')) AS tid
-        FROM carrier_events c
+        FROM etl.carrier_inbound c
+        WHERE c.salesordernumber::text IN (SELECT salesordernumber::text FROM latest_orders)
         GROUP BY c.salesordernumber
     ) ci ON ci.salesordernumber::text = lo.salesordernumber::text
     LEFT JOIN (
@@ -117,7 +111,7 @@ transport_type AS (
                  OR sm.modeoftransportation ILIKE '%truck%' OR sm.modeoftransportation ILIKE '%drive%'
                  OR sm.modeoftransportation ILIKE '%courier%' THEN 'Road'
             WHEN EXISTS (
-                SELECT 1 FROM carrier_events c
+                SELECT 1 FROM etl.carrier_inbound c
                 WHERE c.salesordernumber::text = lo.salesordernumber::text
                   AND NULLIF(BTRIM(c.flightnumber::text), '') IS NOT NULL) THEN 'Air'
             ELSE 'Road'
@@ -166,7 +160,7 @@ actual_events AS (
         TRIM(c.event_description::text) AS event_description,
         c.eventtimestamp,
         c.audit_timestamp
-    FROM carrier_events c
+    FROM etl.carrier_inbound c
     JOIN latest_orders lo ON lo.salesordernumber::text = c.salesordernumber::text
 ),
 
@@ -341,7 +335,7 @@ carrier_detail_flags AS (
         MAX(CASE WHEN LOWER(COALESCE(ci."event"::text, '')) LIKE '%delay%'
                   OR LOWER(COALESCE(ci.event_description::text, '')) LIKE '%delay%'
                  THEN 1 ELSE 0 END) AS has_delay_event
-    FROM carrier_events ci
+    FROM etl.carrier_inbound ci
     JOIN latest_orders lo ON lo.salesordernumber::text = ci.salesordernumber::text
     GROUP BY ci.salesordernumber
 ),
@@ -409,7 +403,7 @@ issue_flags AS (
         (tt.derived_mode = 'Road'
          AND COALESCE(cdf.has_flightnumber, 0) = 0
          AND EXISTS (
-             SELECT 1 FROM carrier_events c
+             SELECT 1 FROM etl.carrier_inbound c
              WHERE c.salesordernumber::text = lo.salesordernumber::text
                AND (NULLIF(TRIM(c.departure_airport_iata::text), '') IS NOT NULL
                     OR NULLIF(TRIM(c.arrival_airport_iata::text), '') IS NOT NULL
@@ -499,31 +493,24 @@ WITH latest_orders AS MATERIALIZED (
             WHERE UPPER(TRIM(ci.carriername::text)) = ANY($3)))
 ),
 
--- one scan of carrier_inbound into the window's orders (see main query note)
-carrier_events AS MATERIALIZED (
-    SELECT *
-    FROM etl.carrier_inbound
-    WHERE salesordernumber::text IN (SELECT salesordernumber::text FROM latest_orders)
-),
-
 batch_latest AS (
     SELECT DISTINCT ON (sales_order_id)
         sales_order_id AS salesordernumber, mode_of_transport
     FROM etl.threeagesttwo_batches_inbound
     WHERE NULLIF(TRIM(mode_of_transport::text), '') IS NOT NULL
-      AND sales_order_id::text IN (SELECT salesordernumber::text FROM latest_orders)
     ORDER BY sales_order_id, audit_timestamp DESC
 ),
 
 actual_carriers AS (
     SELECT DISTINCT c.salesordernumber, TRIM(c.carriername::text) AS carriername
-    FROM carrier_events c
+    FROM etl.carrier_inbound c
+    JOIN latest_orders lo ON lo.salesordernumber::text = c.salesordernumber::text
     WHERE NULLIF(TRIM(c.carriername::text), '') IS NOT NULL
 ),
 
 final_transport AS (
     SELECT lo.salesordernumber,
-        CASE WHEN EXISTS (SELECT 1 FROM carrier_events c
+        CASE WHEN EXISTS (SELECT 1 FROM etl.carrier_inbound c
                           WHERE c.salesordernumber::text = lo.salesordernumber::text
                             AND NULLIF(BTRIM(c.flightnumber::text), '') IS NOT NULL) THEN 'Air'
              WHEN UPPER(TRIM(b.mode_of_transport::text)) = 'AIR' THEN 'Air'
@@ -558,7 +545,7 @@ actual_events AS (
     SELECT c.salesordernumber, TRIM(c.carriername::text) AS carriername,
            TRIM(c."event"::text) AS event, c.audit_timestamp,
            e.ui_milestone, e.carrier_milestone_step
-    FROM carrier_events c
+    FROM etl.carrier_inbound c
     JOIN latest_orders lo ON lo.salesordernumber::text = c.salesordernumber::text
     LEFT JOIN expected_events e
       ON e.salesordernumber::text = c.salesordernumber::text
