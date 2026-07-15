@@ -87,15 +87,13 @@ async def carrier_issues(req: ReportRequest):
             if ev not in bucket:
                 bucket.append(ev)
 
-    # carrier tracking id filled from ANY carrier event (latest row is often blank)
-    tid_map: dict[str, str] = {}
-    if so_list:
-        for r in await fetch_all(
-            """SELECT salesordernumber, MAX(NULLIF(TRIM(carrier_trackingid::text), '')) AS tid
-               FROM etl.carrier_inbound WHERE salesordernumber::text = ANY($1::text[])
-               GROUP BY salesordernumber""", so_list):
-            if r.get("tid"):
-                tid_map[str(r["salesordernumber"]).strip()] = str(r["tid"]).strip()
+    # carrier tracking id now comes resolved on each report row (best non-blank
+    # across the order's carrier events, computed in the report SQL)
+    tid_map = {
+        str(r.get("salesordernumber") or "").strip(): str(r["carrier_trackingid"]).strip()
+        for r in items
+        if str(r.get("carrier_trackingid") or "").strip()
+    }
 
     # per-carrier issue tracker, keyed case-insensitively (matches the SQL's
     # UPPER(TRIM(...)) carrier identity, so 'MNX' and 'Mnx' don't split)

@@ -16,3 +16,6 @@ frontend/dist/
 # TS incremental build cache
 frontend/*.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
+
+# local-only mock DB scripts (contain CREATE/INSERT — never ship in the repo)
+backend/mockdb/

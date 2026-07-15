@@ -147,23 +147,31 @@ export function ErrorBox({ error }: { error: unknown }) {
   );
 }
 
-/* ---- data hook ------------------------------------------------------------ */
-export function useApi<T>(fn: () => Promise<T>, deps: unknown[]) {
+/* ---- data hook ------------------------------------------------------------
+   keepPrevious: stale-while-revalidate — hold the last result on the screen
+   while a dep change refetches (no spinner flash / layout jump). `loading` is
+   true only until first data arrives; `refreshing` covers subsequent fetches. */
+export function useApi<T>(
+  fn: () => Promise<T>,
+  deps: unknown[],
+  opts?: { keepPrevious?: boolean }
+) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(true);
   useEffect(() => {
     let alive = true;
-    setLoading(true);
+    setBusy(true);
     setError(null);
+    if (!opts?.keepPrevious) setData(null);
     fn().then(
-      (d) => alive && (setData(d), setLoading(false)),
-      (e) => alive && (setError(e), setLoading(false))
+      (d) => alive && (setData(d), setBusy(false)),
+      (e) => alive && (setError(e), setBusy(false))
     );
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
-  return { data, error, loading };
+  return { data, error, loading: busy && data === null, refreshing: busy && data !== null };
 }

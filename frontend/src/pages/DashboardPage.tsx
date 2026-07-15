@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, fmt, Dict, ListResponse } from "../api";
 import {
@@ -47,7 +47,8 @@ export default function DashboardPage() {
   const meta = useApi<Dict>(() => api("/api/shipments/filters"), []);
   const list = useApi<ListResponse>(
     () => api("/api/shipments", { ...f, only_issues: f.only_issues ? "true" : "", page_size: 50 }),
-    [JSON.stringify(f)]
+    [JSON.stringify(f)],
+    { keepPrevious: true } // keep the table on screen while a filter refetches
   );
 
   const set = (patch: Partial<Filters>) => setF((old) => ({ ...old, ...patch, page: patch.page ?? 1 }));
@@ -231,19 +232,22 @@ export default function DashboardPage() {
 
         {list.loading ? (
           <Spinner label="Loading shipments…" />
-        ) : list.error ? (
+        ) : list.error && !list.data ? (
           <ErrorBox error={list.error} />
-        ) : (
-          <ShipmentTable
-            data={list.data!}
-            sort={f.sort}
-            dir={f.dir}
-            onSort={(col) =>
-              set({ sort: col, dir: f.sort === col && f.dir === "desc" ? "asc" : "desc" })
-            }
-            onPage={(p) => set({ page: p })}
-          />
-        )}
+        ) : list.data ? (
+          // stays mounted while a filter refetches — just dims to signal update
+          <div className={list.refreshing ? "pointer-events-none opacity-60 transition-opacity" : "transition-opacity"}>
+            <ShipmentTable
+              data={list.data}
+              sort={f.sort}
+              dir={f.dir}
+              onSort={(col) =>
+                set({ sort: col, dir: f.sort === col && f.dir === "desc" ? "asc" : "desc" })
+              }
+              onPage={(p) => set({ page: p })}
+            />
+          </div>
+        ) : null}
       </Panel>
     </div>
   );
@@ -411,14 +415,30 @@ const COLS: { key: string; label: string; sortable?: boolean }[] = [
   { key: "product", label: "Product" },
   { key: "batchnumber", label: "Batch" },
   { key: "carrier", label: "Carrier", sortable: true },
+  { key: "modeoftransportation", label: "Mode" },
   { key: "route", label: "Route" },
+  { key: "region", label: "Region" },
   { key: "currentmilestone", label: "Milestone" },
   { key: "injectiondate", label: "Injection", sortable: true },
-  { key: "planneddeliverydate", label: "Planned delivery", sortable: true },
+  { key: "planneddeliverydate", label: "Planned", sortable: true },
+  { key: "etadeliverytime", label: "ETA" },
   { key: "risk", label: "Risk", sortable: true },
   { key: "issues", label: "Issues" },
   { key: "lastupdateddt", label: "Updated", sortable: true },
 ];
+const TOTAL_COLS = COLS.length + 1; // + expander
+
+function riskSeverity(s: Dict): string {
+  return /high|critical/i.test(`${s.risk}${s.riskbucket}`) ? "critical"
+    : /med/i.test(`${s.risk}${s.riskbucket}`) ? "warning" : "info";
+}
+
+const modeIcon = (m: any) => {
+  const v = String(m ?? "").toLowerCase();
+  if (/air|flight/.test(v)) return "✈";
+  if (/road|ground|truck|drive|courier/.test(v)) return "▣";
+  return "";
+};
 
 function ShipmentTable({
   data, sort, dir, onSort, onPage,
@@ -430,12 +450,22 @@ function ShipmentTable({
   onPage: (p: number) => void;
 }) {
   const pages = Math.max(1, Math.ceil(data.total / data.page_size));
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const rowKey = (s: Dict, i: number) => `${s.trackingnumber}-${s.salesordernumber}-${i}`;
+  const toggle = (k: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      next.has(k) ? next.delete(k) : next.add(k);
+      return next;
+    });
+
   return (
     <div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr className="border-b border-baseline text-left">
+              <th className="w-6 px-1 py-1.5" />
               {COLS.map((c) => (
                 <th
                   key={c.key}
@@ -451,53 +481,72 @@ function ShipmentTable({
             </tr>
           </thead>
           <tbody>
-            {data.items.map((s, i) => (
-              <tr key={`${s.trackingnumber}-${s.salesordernumber}-${i}`} className="border-b border-grid hover:bg-surface-0">
-                <td className="whitespace-nowrap px-2 py-1.5">
-                  {s.trackingnumber ? (
-                    <Link to={`/shipment/${encodeURIComponent(String(s.trackingnumber))}`} className="font-medium text-s1 hover:underline">
-                      {s.trackingnumber}
-                    </Link>
-                  ) : s.salesordernumber ? (
-                    <Link to={`/shipment/${encodeURIComponent(String(s.salesordernumber))}`} className="text-ink-2 hover:underline" title="No sensitech tracking number — opening by sales order">
-                      (via SO)
-                    </Link>
-                  ) : (
-                    "—"
+            {data.items.map((s, i) => {
+              const k = rowKey(s, i);
+              const isOpen = open.has(k);
+              return (
+                <Fragment key={k}>
+                  <tr className={`border-b border-grid hover:bg-surface-0 ${isOpen ? "bg-surface-0" : ""}`}>
+                    <td className="px-1 py-1.5 align-top">
+                      <button onClick={() => toggle(k)}
+                        className="flex h-5 w-5 items-center justify-center rounded text-ink-3 hover:bg-edge hover:text-ink"
+                        title={isOpen ? "Collapse" : "Show all fields"}>
+                        <span className={`transition-transform ${isOpen ? "rotate-90" : ""}`}>▸</span>
+                      </button>
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5">
+                      {s.trackingnumber ? (
+                        <Link to={`/shipment/${encodeURIComponent(String(s.trackingnumber))}`} className="font-medium text-s1 hover:underline">
+                          {s.trackingnumber}
+                        </Link>
+                      ) : s.salesordernumber ? (
+                        <Link to={`/shipment/${encodeURIComponent(String(s.salesordernumber))}`} className="text-ink-2 hover:underline" title="No sensitech tracking number — opening by sales order">
+                          (via SO)
+                        </Link>
+                      ) : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.text(s.salesordernumber)}</td>
+                    <td className="max-w-[130px] truncate px-2 py-1.5" title={s.product ?? ""}>{fmt.text(s.product)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.text(s.batchnumber)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5">{fmt.text(s.carrier)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-ink-2" title={s.modeoftransportation ?? ""}>
+                      {modeIcon(s.modeoftransportation)} {fmt.text(s.modeoftransportation)}
+                    </td>
+                    <td className="max-w-[150px] truncate px-2 py-1.5 text-ink-2" title={`${s.origin ?? ""} → ${s.destinationname ?? ""}`}>
+                      {fmt.text(s.origin)} → {fmt.text(s.destinationname)}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-ink-2">{fmt.text(s.region)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5">
+                      {fmt.text(s.currentmilestone)}
+                      {s.currentleg && s.totallegs ? (
+                        <span className="ml-1 text-[11px] text-ink-3">leg {s.currentleg}/{s.totallegs}</span>
+                      ) : null}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.date(s.injectiondate)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.date(s.planneddeliverydate)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 tnum text-ink-2">{fmt.dt(s.etadeliverytime)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5">
+                      {s.risk || s.riskbucket ? (
+                        <SeverityBadge severity={riskSeverity(s)} label={String(s.riskbucket || s.risk)} />
+                      ) : "—"}
+                    </td>
+                    <td className="px-2 py-1.5"><IssueChips issues={s.issues} /></td>
+                    <td className="whitespace-nowrap px-2 py-1.5 tnum text-ink-3">{fmt.dt(s.lastupdateddt)}</td>
+                  </tr>
+                  {isOpen && (
+                    <tr className="border-b border-grid">
+                      <td />
+                      <td colSpan={TOTAL_COLS - 1} className="px-2 pb-3 pt-1">
+                        <RowDetail s={s} />
+                      </td>
+                    </tr>
                   )}
-                </td>
-                <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.text(s.salesordernumber)}</td>
-                <td className="max-w-[130px] truncate px-2 py-1.5" title={s.product ?? ""}>{fmt.text(s.product)}</td>
-                <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.text(s.batchnumber)}</td>
-                <td className="whitespace-nowrap px-2 py-1.5">{fmt.text(s.carrier)}</td>
-                <td className="max-w-[160px] truncate px-2 py-1.5 text-ink-2" title={`${s.origin ?? ""} → ${s.destinationname ?? ""}`}>
-                  {fmt.text(s.origin)} → {fmt.text(s.destinationname)}
-                </td>
-                <td className="whitespace-nowrap px-2 py-1.5">
-                  {fmt.text(s.currentmilestone)}
-                  {s.currentleg && s.totallegs ? (
-                    <span className="ml-1 text-[11px] text-ink-3">leg {s.currentleg}/{s.totallegs}</span>
-                  ) : null}
-                </td>
-                <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.date(s.injectiondate)}</td>
-                <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.date(s.planneddeliverydate)}</td>
-                <td className="whitespace-nowrap px-2 py-1.5">
-                  {s.risk || s.riskbucket ? (
-                    <SeverityBadge
-                      severity={/high|critical/i.test(`${s.risk}${s.riskbucket}`) ? "critical" : /med/i.test(`${s.risk}${s.riskbucket}`) ? "warning" : "info"}
-                      label={String(s.riskbucket || s.risk)}
-                    />
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td className="px-2 py-1.5"><IssueChips issues={s.issues} /></td>
-                <td className="whitespace-nowrap px-2 py-1.5 tnum text-ink-3">{fmt.dt(s.lastupdateddt)}</td>
-              </tr>
-            ))}
+                </Fragment>
+              );
+            })}
             {data.items.length === 0 && (
               <tr>
-                <td colSpan={COLS.length} className="px-2 py-8 text-center text-sm text-ink-3">
+                <td colSpan={TOTAL_COLS} className="px-2 py-8 text-center text-sm text-ink-3">
                   No shipments match the current filters.
                 </td>
               </tr>
@@ -516,6 +565,71 @@ function ShipmentTable({
             className="rounded border border-edge px-2 py-1 disabled:opacity-40">next ›</button>
         </span>
       </div>
+    </div>
+  );
+}
+
+/* ---- expandable per-row detail: every remaining shipment field, grouped ---- */
+function RowDetail({ s }: { s: Dict }) {
+  const groups: { title: string; fields: [string, any][] }[] = [
+    { title: "Logistics", fields: [
+      ["Carrier", s.carrier], ["Mode", s.modeoftransportation], ["Flight #", s.flightnumber],
+      ["Carrier tracking #", s.carriertrackingnumber], ["Airway / leg", s.currentleg && s.totallegs ? `${s.currentleg} / ${s.totallegs}` : null],
+      ["Shipment type", s.shipmenttype], ["Route", s.route],
+    ]},
+    { title: "Schedule", fields: [
+      ["Injection", `${fmt.date(s.injectiondate)} ${s.injectiontime ?? ""}`.trim()],
+      ["Planned delivery", `${fmt.date(s.planneddeliverydate)} ${s.planneddeliverytime ?? ""}`.trim()],
+      ["ETA", fmt.dt(s.etadeliverytime)], ["Scheduled departure", fmt.dt(s.scheduledeparted)],
+      ["Actual departed", fmt.dt(s.actualdeparted)], ["Actual delivered", fmt.dt(s.actualdeliverytime)],
+      ["Vial expiry", fmt.dt(s.vialexpirationtime)], ["Last GPS", fmt.dt(s.lastgps)],
+    ]},
+    { title: "Location", fields: [
+      ["Origin", s.origin], ["Destination", s.destinationname],
+      ["Destination address", s.destinationaddress],
+      ["City / country", [s.destinationcity, s.destinationcountry].filter(Boolean).join(", ")],
+      ["Current location", s.currentlocation], ["Distance", s.distance ? `${s.distance} km` : null],
+      ["Geofence", s.geofence_status],
+    ]},
+    { title: "Dose & product", fields: [
+      ["Product", s.product], ["Batch #", s.batchnumber], ["Vial ID", s.vialid],
+      ["Dose status", s.dosestatus], ["Order type", s.ordertype],
+      ["Account", s.account], ["Production site", s.production_site],
+    ]},
+    { title: "Status & risk", fields: [
+      ["Milestone", `${s.currentmilestone ?? "—"}${s.currentmilestonestep ? ` (step ${s.currentmilestonestep})` : ""}`],
+      ["Route status", s.routestatus], ["Risk", s.riskbucket || s.risk], ["Risk reason", s.risk_reason],
+      ["Delay reason", s.delayreason], ["Alerts", s.countofalerts && Number(s.countofalerts) > 0 ? `${s.countofalerts} · ${fmt.text(s.alertstitle)}` : null],
+      ["POD", s.podname || s.pod_receival_time],
+    ]},
+  ];
+  return (
+    <div className="grid gap-3 rounded-md border border-edge bg-surface-1 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      {groups.map((g) => (
+        <div key={g.title} className="min-w-0">
+          <div className="mb-1.5 border-b border-grid pb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">
+            {g.title}
+          </div>
+          <dl className="flex flex-col gap-1">
+            {g.fields.map(([label, value]) => (
+              <div key={label} className="grid grid-cols-[96px_1fr] items-baseline gap-1.5">
+                <dt className="truncate text-[11px] text-ink-3" title={label}>{label}</dt>
+                <dd className="min-w-0 break-words text-[12px]" title={value == null ? "" : String(value)}>
+                  {fmt.text(value)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ))}
+      {s.trackingnumber && (
+        <div className="sm:col-span-2 lg:col-span-3 xl:col-span-5">
+          <Link to={`/shipment/${encodeURIComponent(String(s.trackingnumber))}`}
+            className="text-xs text-s1 hover:underline">
+            Open full shipment detail (map, ghost pings, milestones) →
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

@@ -45,10 +45,15 @@ docker run -d --name rlt-mockdb -e POSTGRES_PASSWORD=mockpass \
 docker exec -i rlt-mockdb psql -U postgres -d rltmock < backend/mockdb/init.sql
 ```
 
-`backend/mockdb/init.sql` seeds seven shipments covering every failure mode
-(missing batch, rejected carrier feed, ghost pings, out-of-order milestones,
-cancelled-upstream, delivered-but-never-closed, GPS lost). Useful for demos
-and for testing changes without touching production data.
+`backend/mockdb/init.sql` seeds shipments covering every failure mode (missing
+batch, rejected carrier feed, ghost pings, out-of-order milestones,
+cancelled-upstream, delivered-but-never-closed, GPS lost) plus ~36 synthetic
+shipments so the analytics charts have meaningful distributions.
+
+> **Note:** `backend/mockdb/` is intentionally **git-ignored** — it contains
+> `CREATE`/`INSERT` DDL and is kept local-only so it can never be run against
+> the wrong database by accident. The file is not in the repo; it lives on the
+> dev machine only.
 
 ---
 
@@ -106,6 +111,16 @@ shipment row):
   than they occurred (audit_timestamp vs eventtimestamp)
 - `duplicate_event`, `missed_steps` (delivered but phases never reported)
 
+### Analytics (`/api/analytics/*`, Analytics page)
+
+Carrier-performance and fleet analytics over `etl.shipment`, windowed by
+injection date (30/60/90/180 days) and cached: on-time delivery rate and
+average transit time per carrier, shipment volume, delivery-status
+distribution, air/road split, volume by region/product, top origin→destination
+lanes, and a weekly on-time-vs-late trend. Charts are hand-rolled inline SVG on
+the shared palette (bars, donuts, stacked columns) — no chart-library
+dependency, theme-aware, with legends and hover labels.
+
 ### Injection outlook (`/api/kpis/injections`)
 
 Today / tomorrow / future (next 30 days) injections from `etl.shipment`, each
@@ -162,6 +177,8 @@ fix inside geofence; `dist_threshold` or `DEFAULT_GEOFENCE_KM`) →
 | `GET /api/kpis/alerts` | alert-title breakdown from `alertstitle` |
 | `GET /api/shipments` | paginated list, filters, inline flag booleans; `injection_from`/`injection_to` window (UI defaults to last 15 days) |
 | `GET /api/kpis/injections` | today/tomorrow/future dose status, on-time/late, air-road split |
+| `GET /api/analytics/carriers` | per-carrier performance: on-time %, transit time, cancel/issue rates |
+| `GET /api/analytics/overview` | status distribution, mode/region/product volume, top lanes, weekly trend |
 | `POST /api/reports/carrier-issues` | on-demand carrier data-quality report (never auto-fetched) |
 | `POST /api/reports/carrier-issues/email` | carrier email draft: HTML + .eml (X-Unsent) |
 | `GET /api/shipments/filters` | dropdown values |

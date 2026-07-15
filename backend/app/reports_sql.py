@@ -54,6 +54,16 @@ latest_carrier AS (
     WHERE rn = 1
 ),
 
+-- best non-blank carrier tracking id across ALL of the order's carrier events
+-- (the latest row is frequently blank), so the report/email always carry it
+carrier_tracking AS (
+    SELECT c.salesordernumber,
+           MAX(NULLIF(TRIM(c.carrier_trackingid::text), '')) AS carrier_trackingid
+    FROM etl.carrier_inbound c
+    JOIN latest_orders lo ON lo.salesordernumber::text = c.salesordernumber::text
+    GROUP BY c.salesordernumber
+),
+
 transport_type AS (
     SELECT
         lo.salesordernumber,
@@ -291,7 +301,7 @@ issue_flags AS (
         lo.salesordernumber,
         lo.ordertype,
         lc.carriername,
-        lc.carrier_trackingid,
+        COALESCE(ct.carrier_trackingid, lc.carrier_trackingid) AS carrier_trackingid,
         tt.derived_mode,
         COALESCE(cdf.carrier_event_count, 0) AS carrier_event_count,
 
@@ -345,6 +355,7 @@ issue_flags AS (
 
     FROM latest_orders lo
     LEFT JOIN latest_carrier lc ON lc.salesordernumber::text = lo.salesordernumber::text
+    LEFT JOIN carrier_tracking ct ON ct.salesordernumber::text = lo.salesordernumber::text
     LEFT JOIN transport_type tt ON tt.salesordernumber::text = lo.salesordernumber::text
     LEFT JOIN unordered_flag u ON u.salesordernumber::text = lo.salesordernumber::text
     LEFT JOIN missing_flag m ON m.salesordernumber::text = lo.salesordernumber::text

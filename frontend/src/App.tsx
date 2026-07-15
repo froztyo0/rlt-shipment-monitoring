@@ -4,6 +4,7 @@ import DashboardPage from "./pages/DashboardPage";
 import ShipmentDetailPage from "./pages/ShipmentDetailPage";
 import OpsPage from "./pages/OpsPage";
 import ReportsPage from "./pages/ReportsPage";
+import AnalyticsPage from "./pages/AnalyticsPage";
 
 // key by tracking number so per-shipment state (e.g. the selected sales
 // order) resets when navigating from one shipment straight to another
@@ -50,6 +51,9 @@ export default function App() {
             <NavLink to="/" end className={navCls}>
               Dashboard
             </NavLink>
+            <NavLink to="/analytics" className={navCls}>
+              Analytics
+            </NavLink>
             <NavLink to="/ops" className={navCls}>
               Ops Issues
             </NavLink>
@@ -72,6 +76,7 @@ export default function App() {
       <main className="mx-auto max-w-[1500px] px-4 py-4">
         <Routes>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/ops" element={<OpsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/shipment/:tracking" element={<ShipmentDetailRoute />} />

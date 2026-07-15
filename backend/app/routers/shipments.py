@@ -15,14 +15,17 @@ router = APIRouter(prefix="/api/shipments", tags=["shipments"])
 
 LIST_COLUMNS = """
   s.trackingnumber, s.salesordernumber, s.product, s.destinationname,
-  s.destinationcity, s.destinationcountry, s.injectiondate, s.injectiontime,
-  s.ordertype, s.dosestatus, s.origin, s.batchnumber, s.planneddeliverydate,
-  s.planneddeliverytime, s.carrier, s.modeoftransportation, s.region,
-  s.currentmilestone, s.currentmilestonestep, s.routestatus, s.risk,
-  s.riskbucket, s.risk_reason, s.countofalerts, s.alertstitle, s.alerttype,
-  s.lastgps, s.lastupdateddt, s.etadeliverytime, s.flightnumber,
+  s.destinationaddress, s.destinationcity, s.destinationcountry, s.injectiondate,
+  s.injectiontime, s.ordertype, s.dosestatus, s.origin, s.originaddress,
+  s.batchnumber, s.vialid, s.planneddeliverydate, s.planneddeliverytime,
+  s.carrier, s.modeoftransportation, s.region, s.currentmilestone,
+  s.currentmilestonestep, s.route, s.routestatus, s.risk, s.riskbucket,
+  s.risk_reason, s.countofalerts, s.alertstitle, s.alerttype, s.lastgps,
+  s.lastupdateddt, s.etadeliverytime, s.scheduledeparted, s.flightnumber,
   s.carriertrackingnumber, s.actualdeparted, s.actualdeliverytime,
-  s.delayreason, s.currentleg, s.totallegs, s.shipmenttype, s.production_site
+  s.vialexpirationtime, s.delayreason, s.currentleg, s.totallegs,
+  s.shipmenttype, s.production_site, s.podname, s.pod_receival_time,
+  s.geofence_status, s.account, s.currentlocation, s.distance
 """
 
 SORTABLE = {
