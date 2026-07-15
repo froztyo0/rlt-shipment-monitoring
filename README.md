@@ -121,6 +121,18 @@ lanes, and a weekly on-time-vs-late trend. Charts are hand-rolled inline SVG on
 the shared palette (bars, donuts, stacked columns) — no chart-library
 dependency, theme-aware, with legends and hover labels.
 
+### Shipment detail page
+
+Click any tracking number to open the detail view: a header status pill + a
+**KPI strip** (time in transit, ETA-vs-planned delta, distance remaining,
+time-to-injection countdown, on-time projection), a **horizontal milestone
+stepper** (current step, per-step timestamps, time-in-stage), the map with
+**layer toggles** (actual trail / planned route / pings / ghosts / airports)
+and a **replay scrubber**, the per-SO milestone panel, and an **order
+lifecycle timeline** showing when each source system delivered data (ROME →
+3A GEST2 full-load & incremental → carrier events → Sensitech), with the
+full-load stages keyed on `load_timestamp` and the rest on `audit_timestamp`.
+
 ### Injection outlook (`/api/kpis/injections`)
 
 Today / tomorrow / future (next 30 days) injections from `etl.shipment`, each
@@ -185,6 +197,7 @@ fix inside geofence; `dist_threshold` or `DEFAULT_GEOFENCE_KM`) →
 | `GET /api/shipments/{tn}/detail` | full row + issues + source traces + RCA + related orders (`?so=` to pick one) |
 | `GET /api/shipments/{tn}/pings` | pings merged & deduped across all SOs on the tracking number |
 | `GET /api/shipments/{tn}/milestones` | per-SO raw events + sequence validation + expected ladder (`?so=`) |
+| `GET /api/shipments/{tn}/lifecycle` | data-provenance: when each source (ROME, 3A GEST2 full-load/incremental, carrier, Sensitech) delivered data |
 | `GET /api/ops/data-quality?flag=` | flagged shipments + upstream probes |
 | `GET /api/ops/sequence-violations` | recent orders replayed against maps |
 | `GET /api/ops/stale-injections` | overdue shipments with RCA verdicts |

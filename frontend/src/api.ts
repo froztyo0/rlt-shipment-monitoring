@@ -100,6 +100,30 @@ export async function api<T = Dict>(path: string, params?: Dict): Promise<T> {
   return res.json();
 }
 
+/** Parse a possibly offset-less DB timestamp as UTC (matches fmt.ago). */
+export function parseTs(v: any): Date | null {
+  if (v === null || v === undefined || v === "") return null;
+  let str = String(v);
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(str)) {
+    str = str.replace(" ", "T") + "Z";
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+export function haversineKm(
+  lat1: number, lon1: number, lat2: number, lon2: number
+): number {
+  const R = 6371.0088;
+  const rad = (x: number) => (x * Math.PI) / 180;
+  const dphi = rad(lat2 - lat1);
+  const dl = rad(lon2 - lon1);
+  const a =
+    Math.sin(dphi / 2) ** 2 +
+    Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
 export const fmt = {
   dt(v: any): string {
     if (v === null || v === undefined || v === "") return "—";
@@ -128,6 +152,18 @@ export const fmt = {
   text(v: any): string {
     const s = v === null || v === undefined ? "" : String(v).trim();
     return s === "" ? "—" : s;
+  },
+  // compact signed duration between two instants, e.g. "2d 3h" / "45m"
+  dur(ms: number | null): string | null {
+    if (ms == null || isNaN(ms)) return null;
+    const sign = ms < 0 ? "-" : "";
+    let s = Math.abs(ms) / 1000;
+    const d = Math.floor(s / 86400); s -= d * 86400;
+    const h = Math.floor(s / 3600); s -= h * 3600;
+    const m = Math.floor(s / 60);
+    if (d > 0) return `${sign}${d}d ${h}h`;
+    if (h > 0) return `${sign}${h}h ${m}m`;
+    return `${sign}${m}m`;
   },
   ago(v: any): string | null {
     if (v === null || v === undefined || v === "") return null;

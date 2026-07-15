@@ -75,6 +75,93 @@ def _order_summary(r: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# order lifecycle / data provenance
+# ---------------------------------------------------------------------------
+# Which source each event came from, in ETL pipeline order. NOTE: the two
+# full-load tables carry their ingest time in a TEXT `load_timestamp` column
+# (cast to timestamp), every other table uses `audit_timestamp`.
+_LOAD_TS = ("(CASE WHEN load_timestamp::text ~ '^\\s*\\d{4}-\\d{2}-\\d{2}' "
+            "THEN load_timestamp::text::timestamp END)")
+
+# key, label, table, join column, timestamp expr, kind
+LIFECYCLE_STAGES = [
+    ("rome", "ROME order", "etl.rome_inbound_orders", "salesordernumber", "audit_timestamp", "inbound"),
+    ("rome_reject", "ROME rejects", "etl.rome_inbound_rejects", "salesordernumber", "audit_timestamp", "rejects"),
+    ("a2_sales_full", "3A GEST2 sales — full-load", "etl.threeagesttwo_sales_inbound_fullload", "sales_order_id", _LOAD_TS, "inbound"),
+    ("a2_sales", "3A GEST2 sales — incremental", "etl.threeagesttwo_sales_inbound", "sales_order_id", "audit_timestamp", "inbound"),
+    ("a2_batches_full", "3A GEST2 batches — full-load", "etl.threeagesttwo_batches_inbound_fullload", "sales_order_id", _LOAD_TS, "inbound"),
+    ("a2_batches", "3A GEST2 batches — incremental", "etl.threeagesttwo_batches_inbound", "sales_order_id", "audit_timestamp", "inbound"),
+    ("carrier", "Carrier events", "etl.carrier_inbound", "salesordernumber", "audit_timestamp", "inbound"),
+    ("carrier_reject", "Carrier rejects", "etl.carrier_inbound_rejects", "salesordernumber", "audit_timestamp", "rejects"),
+    ("sensitech", "Sensitech pings", "etl.sensitech_inbound_trip", "salesordernumber", "audit_timestamp", "inbound"),
+    ("sensitech_reject", "Sensitech rejects", "etl.sensitech_inbound_rejects", "salesordernumber", "audit_timestamp", "rejects"),
+]
+
+# inbound stage -> its reject sibling
+_REJECT_OF = {"rome": "rome_reject", "carrier": "carrier_reject", "sensitech": "sensitech_reject"}
+_TS_BASIS = {"a2_sales_full": "load_timestamp (text)", "a2_batches_full": "load_timestamp (text)"}
+
+
+@router.get("/{tracking}/lifecycle")
+async def shipment_lifecycle(tracking: str):
+    """Data-provenance timeline: when each source system's data arrived for
+    this order, in ETL pipeline order."""
+    _primary, group = await _get_group(tracking)
+    ids = sorted({
+        v for r in group
+        for v in (str(r.get("salesordernumber") or "").strip(),
+                  str(r.get("salesordernumber_3a2") or "").strip())
+        if v
+    })
+    if not ids:
+        return {"sales_orders": [], "stages": []}
+
+    parts = [
+        f"""SELECT '{key}' AS src, COUNT(*) AS n,
+                   MIN({ts}) AS first_ts, MAX({ts}) AS last_ts
+            FROM {table} WHERE {join}::text = ANY($1::text[])"""
+        for key, _label, table, join, ts, _kind in LIFECYCLE_STAGES
+    ]
+    rows = await fetch_all(" UNION ALL ".join(parts), ids)
+    by_src = {r["src"]: r for r in rows}
+
+    def iso(v):
+        return v.isoformat() if hasattr(v, "isoformat") else (str(v) if v else None)
+
+    # sample error messages for any reject stage that fired
+    reject_msgs: dict[str, Optional[str]] = {}
+    for key, _l, table, join, _ts, kind in LIFECYCLE_STAGES:
+        if kind == "rejects" and (by_src.get(key, {}).get("n") or 0) > 0:
+            m = await fetch_all(
+                f"SELECT error_message FROM {table} WHERE {join}::text = ANY($1::text[]) "
+                f"AND NULLIF(btrim(error_message::text),'') IS NOT NULL LIMIT 1", ids)
+            reject_msgs[key] = (m[0]["error_message"] if m else None)
+
+    stages = []
+    for key, label, _table, _join, _ts, kind in LIFECYCLE_STAGES:
+        if kind != "inbound":
+            continue
+        row = by_src.get(key, {})
+        n = int(row.get("n") or 0)
+        rej_key = _REJECT_OF.get(key)
+        rej = by_src.get(rej_key, {}) if rej_key else {}
+        rej_n = int(rej.get("n") or 0)
+        stages.append({
+            "key": key,
+            "label": label,
+            "received": n > 0,
+            "count": n,
+            "first_ts": iso(row.get("first_ts")),
+            "last_ts": iso(row.get("last_ts")),
+            "ts_basis": _TS_BASIS.get(key, "audit_timestamp"),
+            "rejected_count": rej_n,
+            "reject_last_ts": iso(rej.get("last_ts")) if rej_n else None,
+            "reject_message": reject_msgs.get(rej_key) if rej_n else None,
+        })
+    return {"sales_orders": ids, "stages": stages}
+
+
 @router.get("/{tracking}/detail")
 async def shipment_detail(tracking: str, so: Optional[str] = Query(default=None)):
     row, group = await _get_group(tracking, so)

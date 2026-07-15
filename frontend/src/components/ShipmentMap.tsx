@@ -22,13 +22,56 @@ export const plottable = (lat: number | null, lon: number | null) =>
   lat != null && lon != null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 &&
   !(Math.abs(lat) < 1e-6 && Math.abs(lon) < 1e-6); // (0,0) = null island
 
-export default function ShipmentMap({ data }: { data: PingsResponse }) {
-  const clean = data.pings.filter((p) => !p.ghost && plottable(p.lat, p.lon));
+export interface MapLayers {
+  trail: boolean;
+  pings: boolean;
+  ghosts: boolean;
+  airports: boolean;
+  planned: boolean;
+}
+const ALL_LAYERS: MapLayers = { trail: true, pings: true, ghosts: true, airports: true, planned: true };
+
+export default function ShipmentMap({
+  data, layers, visibleCount,
+}: {
+  data: PingsResponse;
+  layers?: Partial<MapLayers>;
+  visibleCount?: number | null;
+}) {
+  const L_ = { ...ALL_LAYERS, ...(layers ?? {}) };
+  const allClean = data.pings.filter((p) => !p.ghost && plottable(p.lat, p.lon));
+  const clean = visibleCount == null ? allClean : allClean.slice(0, Math.max(0, visibleCount));
   // coordinate-invalid ghosts are unplottable — they live in the ghost table below
   const ghosts = data.pings.filter((p) => p.ghost && plottable(p.lat, p.lon));
 
+  // planned route: origin → airports (carrier-reported first, else inferred) → destination
+  const plannedRoute = useMemo(() => {
+    const pts: [number, number][] = [];
+    const push = (lat?: number | null, lon?: number | null) => {
+      if (lat == null || lon == null) return;
+      const last = pts[pts.length - 1];
+      if (!last || last[0] !== lat || last[1] !== lon) pts.push([lat, lon]);
+    };
+    push(data.origin.lat, data.origin.lon);
+    const flights = data.reported_flights.length ? data.reported_flights : [];
+    if (flights.length) {
+      for (const f of flights) {
+        push(f.departure_airport?.lat, f.departure_airport?.lon);
+        push(f.arrival_airport?.lat, f.arrival_airport?.lon);
+      }
+    } else {
+      for (const seg of data.flight_segments) {
+        push(seg.departure_airport?.lat, seg.departure_airport?.lon);
+        push(seg.arrival_airport?.lat, seg.arrival_airport?.lon);
+      }
+    }
+    push(data.destination.lat, data.destination.lon);
+    return pts;
+  }, [data]);
+
+  // bounds computed from the FULL set (stable while scrubbing)
   const bounds = useMemo(() => {
-    const pts: [number, number][] = clean.map((p) => [p.lat!, p.lon!]);
+    const pts: [number, number][] = allClean.map((p) => [p.lat!, p.lon!]);
     if (data.destination.lat != null) pts.push([data.destination.lat, data.destination.lon!]);
     if (data.origin.lat != null) pts.push([data.origin.lat, data.origin.lon!]);
     for (const g of ghosts) pts.push([g.lat!, g.lon!]);
@@ -38,6 +81,7 @@ export default function ShipmentMap({ data }: { data: PingsResponse }) {
       }
     }
     return pts.length ? L.latLngBounds(pts).pad(0.15) : L.latLngBounds([[0, 0], [1, 1]]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
   const trail: [number, number][] = clean.map((p) => [p.lat!, p.lon!]);
@@ -64,13 +108,21 @@ export default function ShipmentMap({ data }: { data: PingsResponse }) {
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
 
+      {/* planned route — dashed grey, drawn under everything */}
+      {L_.planned && plannedRoute.length >= 2 && (
+        <Polyline positions={plannedRoute}
+          pathOptions={{ color: "var(--text-muted)", weight: 2, dashArray: "2 6", opacity: 0.8 }}>
+          <Tooltip sticky>Planned route (origin → airports → destination)</Tooltip>
+        </Polyline>
+      )}
+
       {/* travelled trail */}
-      {trail.length >= 2 && (
+      {L_.trail && trail.length >= 2 && (
         <Polyline positions={trail} pathOptions={{ color: "var(--series-1)", weight: 2, opacity: 0.9 }} />
       )}
 
       {/* inferred flight legs — dashed violet */}
-      {data.flight_segments.map((seg, i) => (
+      {L_.trail && data.flight_segments.map((seg, i) => (
         <Polyline
           key={`seg-${i}`}
           positions={[[seg.from.lat, seg.from.lon], [seg.to.lat, seg.to.lon]]}
@@ -85,7 +137,7 @@ export default function ShipmentMap({ data }: { data: PingsResponse }) {
       ))}
 
       {/* clean pings */}
-      {clean.map((p, i) => (
+      {L_.pings && clean.map((p, i) => (
         <CircleMarker
           key={`p-${i}`}
           center={[p.lat!, p.lon!]}
@@ -109,7 +161,7 @@ export default function ShipmentMap({ data }: { data: PingsResponse }) {
       ))}
 
       {/* ghost pings */}
-      {ghosts.map((p, i) => (
+      {L_.ghosts && ghosts.map((p, i) => (
         <CircleMarker
           key={`g-${i}`}
           center={[p.lat!, p.lon!]}
@@ -128,7 +180,7 @@ export default function ShipmentMap({ data }: { data: PingsResponse }) {
       ))}
 
       {/* airports */}
-      {airports.map((a) => (
+      {L_.airports && airports.map((a) => (
         <Marker key={a.iata} position={[a.lat, a.lon]} icon={airportIcon}>
           <Popup>
             <div style={{ fontSize: 12 }}>
