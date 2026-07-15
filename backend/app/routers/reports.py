@@ -72,7 +72,7 @@ async def carrier_issues(req: ReportRequest):
     # specific event anomalies per order (for the missing/out-of-order sentences)
     order_events: dict[str, dict[str, list[str]]] = {}
     if so_list:
-        for r in await fetch_all(build_event_detail_sql(), req.start_date, req.end_date):
+        for r in await fetch_all(build_event_detail_sql(), req.start_date, req.end_date, wanted or None):
             so = str(r.get("salesordernumber") or "").strip()
             ev = str(r.get("event") or "").strip()
             status = r.get("event_status")

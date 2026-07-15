@@ -37,8 +37,16 @@ WITH latest_orders AS MATERIALIZED (
     ) t
     WHERE rn = 1
       AND has_cancelled = 0
+      -- carrier prune: when carriers are requested, keep only orders touched
+      -- by them so the whole downstream chain shrinks (the final SELECT still
+      -- filters on the *latest* carrier for exactness)
+      AND ($3::text[] IS NULL OR salesordernumber::text IN (
+            SELECT ci.salesordernumber::text FROM etl.carrier_inbound ci
+            WHERE UPPER(TRIM(ci.carriername::text)) = ANY($3)))
 ),
 
+-- bound to the window's orders so ROW_NUMBER doesn't sort the ENTIRE
+-- carrier_inbound table on every run (this was the main report timeout)
 latest_carrier AS (
     SELECT salesordernumber, carriername, carrier_trackingid
     FROM (
@@ -52,6 +60,7 @@ latest_carrier AS (
             ) AS rn
         FROM etl.carrier_inbound
         WHERE NULLIF(TRIM(carriername::text), '') IS NOT NULL
+          AND salesordernumber::text IN (SELECT salesordernumber::text FROM latest_orders)
     ) t
     WHERE rn = 1
 ),
@@ -479,6 +488,9 @@ WITH latest_orders AS MATERIALIZED (
         WHERE injectiondate::date BETWEEN $1 AND $2
     ) t
     WHERE rn = 1 AND has_cancelled = 0
+      AND ($3::text[] IS NULL OR salesordernumber::text IN (
+            SELECT ci.salesordernumber::text FROM etl.carrier_inbound ci
+            WHERE UPPER(TRIM(ci.carriername::text)) = ANY($3)))
 ),
 
 batch_latest AS (
