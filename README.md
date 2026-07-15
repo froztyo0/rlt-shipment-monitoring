@@ -132,7 +132,9 @@ pings / ghosts / airports), a **replay scrubber**, distinct markers (aircraft
 silhouette, airport badge, delivery-truck current position, destination pin), and an
 **animated aircraft** that tracks a predicted in-flight position along the
 departure→arrival path while the shipment is airborne, the per-SO milestone
-panel, and an **order
+panel, a **GPS trip-analytics** strip (ground-speed profile with the air-leg
+threshold, per-trip breakdown, ghost-cause donut — all derived from the pings
+already fetched, no extra queries), and an **order
 lifecycle timeline** showing when each source system delivered data (ROME →
 3A GEST2 full-load & incremental → carrier events → Sensitech), with the
 full-load stages keyed on `load_timestamp` and the rest on `audit_timestamp`.

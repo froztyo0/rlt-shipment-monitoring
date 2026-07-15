@@ -1,9 +1,10 @@
 import { ReactNode, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, Dict, fmt, haversineKm, parseTs, PingsResponse } from "../api";
+import { api, Dict, fmt, haversineKm, parseTs, Ping, PingsResponse } from "../api";
 import {
   ErrorBox, IssueChips, Panel, SEV_COLOR, SEV_ICON, SeverityBadge, Spinner, useApi,
 } from "../components/ui";
+import { Donut } from "../components/charts";
 import ShipmentMap, { MapLayers, plottable } from "../components/ShipmentMap";
 
 const enc = encodeURIComponent;
@@ -202,6 +203,13 @@ export default function ShipmentDetailPage() {
         <MilestonePanel miles={miles} so={String(s.salesordernumber ?? "")} />
       </div>
 
+      {/* ---- GPS trip analytics (from the already-fetched pings) --------------- */}
+      {pings.data && pings.data.pings.length > 0 && (
+        <Panel title="GPS trip analytics">
+          <GpsAnalytics pings={pings.data} />
+        </Panel>
+      )}
+
       {/* ---- order lifecycle / data provenance -------------------------------- */}
       <Panel title="Order lifecycle — where each event came from">
         {lifecycle.loading ? (
@@ -307,6 +315,119 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
         {children}
       </div>
     </div>
+  );
+}
+
+/* ---- GPS trip analytics (all derived from the fetched pings, no extra API) - */
+const FLIGHT_KMH = 300;
+
+function GpsAnalytics({ pings }: { pings: PingsResponse }) {
+  const all = pings.pings;
+  const cleanSpeeds = all
+    .filter((p) => !p.ghost && p.speed_kmh != null)
+    .map((p) => p.speed_kmh as number);
+
+  // per-trip / per-device breakdown
+  const groups = new Map<string, Ping[]>();
+  for (const p of all) {
+    const k = String(p.tripid || p.device || "—");
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(p);
+  }
+  const trips = [...groups.entries()].map(([id, ps]) => {
+    const speeds = ps.filter((p) => !p.ghost && p.speed_kmh != null).map((p) => p.speed_kmh as number);
+    const times = ps.map((p) => p.ts).filter(Boolean).sort() as string[];
+    return {
+      id,
+      pings: ps.length,
+      ghosts: ps.filter((p) => p.ghost).length,
+      maxSpeed: speeds.length ? Math.max(...speeds) : null,
+      avgSpeed: speeds.length ? speeds.reduce((a, b) => a + b, 0) / speeds.length : null,
+      flight: speeds.some((v) => v > FLIGHT_KMH) || pings.flight_segments.length > 0,
+      first: times[0], last: times[times.length - 1],
+    };
+  });
+
+  const ghostReasons = (pings.summary?.ghost_reasons ?? {}) as Record<string, number>;
+  const ghostData = Object.entries(ghostReasons).map(([k, v], i) => ({
+    label: k.replaceAll("_", " "), value: Number(v),
+    color: ["var(--status-critical)", "var(--series-8)", "var(--series-3)", "var(--series-7)", "var(--series-5)"][i % 5],
+  }));
+
+  return (
+    <div className="flex flex-col gap-4">
+      {cleanSpeeds.length >= 2 && (
+        <div>
+          <div className="mb-1 flex items-center justify-between text-xs text-ink-3">
+            <span>Ground speed profile (km/h)</span>
+            <span className="tnum">
+              max {Math.round(Math.max(...cleanSpeeds))} · avg{" "}
+              {Math.round(cleanSpeeds.reduce((a, b) => a + b, 0) / cleanSpeeds.length)}
+            </span>
+          </div>
+          <SpeedProfile speeds={cleanSpeeds} />
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-[1fr_auto]">
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="border-b border-baseline text-left text-xs text-ink-3">
+                <th className="px-2 py-1">Trip / device</th>
+                <th className="px-2 py-1 text-right">Pings</th>
+                <th className="px-2 py-1 text-right">Ghosts</th>
+                <th className="px-2 py-1 text-right">Max</th>
+                <th className="px-2 py-1 text-right">Avg</th>
+                <th className="px-2 py-1">Mode</th>
+                <th className="px-2 py-1">Span</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trips.map((t) => (
+                <tr key={t.id} className="border-b border-grid">
+                  <td className="whitespace-nowrap px-2 py-1.5 tnum font-medium">{t.id}</td>
+                  <td className="tnum px-2 py-1.5 text-right">{t.pings}</td>
+                  <td className="tnum px-2 py-1.5 text-right"
+                    style={{ color: t.ghosts ? SEV_COLOR.critical : undefined }}>{t.ghosts}</td>
+                  <td className="tnum px-2 py-1.5 text-right">{t.maxSpeed != null ? `${Math.round(t.maxSpeed)}` : "—"}</td>
+                  <td className="tnum px-2 py-1.5 text-right">{t.avgSpeed != null ? `${Math.round(t.avgSpeed)}` : "—"}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-ink-2">{t.flight ? "✈ air leg" : "▣ road"}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 tnum text-ink-3">
+                    {t.first ? `${fmt.dt(t.first)} → ${fmt.dt(t.last)}` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {ghostData.length > 0 && (
+          <div>
+            <div className="mb-1 text-xs text-ink-3">Ghost ping causes</div>
+            <Donut data={ghostData} size={140} thickness={18} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SpeedProfile({ speeds }: { speeds: number[] }) {
+  const w = 100, h = 26;
+  const max = Math.max(1, ...speeds);
+  const step = w / (speeds.length - 1);
+  const pts = speeds.map((v, i) => `${(i * step).toFixed(2)},${(h - (v / max) * h).toFixed(2)}`);
+  const area = `0,${h} ${pts.join(" ")} ${w},${h}`;
+  const flightY = max > FLIGHT_KMH ? h - (FLIGHT_KMH / max) * h : null;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="h-14 w-full">
+      <polygon points={area} fill="var(--series-1)" opacity={0.12} />
+      <polyline points={pts.join(" ")} fill="none" stroke="var(--series-1)" strokeWidth={0.7} vectorEffect="non-scaling-stroke" />
+      {flightY != null && (
+        <line x1={0} y1={flightY} x2={w} y2={flightY} stroke="var(--series-5)"
+          strokeWidth={0.6} strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />
+      )}
+    </svg>
   );
 }
 
