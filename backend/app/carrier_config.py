@@ -114,4 +114,9 @@ ISSUE_CATALOG: dict[str, tuple[str, str]] = {
         "The Delay Reason field is missing for the delayed event."),
     "missing_shipment_type": ("Missing Shipment Type",
         "The Shipment Type field is missing for this order."),
+    "mode_mismatch_air": ("Transport mode mismatch (looks like Air, marked Road)",
+        "This order is recorded as Road and has no flight number, yet the carrier "
+        "events include air indicators (airport IATA codes / flight details) — it "
+        "likely travelled by air and was mislabelled. Please confirm the mode of "
+        "transport and provide the flight number and flight details."),
 }

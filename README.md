@@ -126,9 +126,12 @@ dependency, theme-aware, with legends and hover labels.
 Click any tracking number to open the detail view: a header status pill + a
 **KPI strip** (time in transit, ETA-vs-planned delta, distance remaining,
 time-to-injection countdown, on-time projection), a **horizontal milestone
-stepper** (current step, per-step timestamps, time-in-stage), the map with
-**layer toggles** (actual trail / planned route / pings / ghosts / airports)
-and a **replay scrubber**, the per-SO milestone panel, and an **order
+stepper** (current step, per-step timestamps, time-in-stage), the map (Carto
+basemap, theme-aware) with **layer toggles** (actual trail / planned route /
+pings / ghosts / airports), a **replay scrubber**, minimal markers, and an
+**animated aircraft** that tracks a predicted in-flight position along the
+departure→arrival path while the shipment is airborne, the per-SO milestone
+panel, and an **order
 lifecycle timeline** showing when each source system delivered data (ROME →
 3A GEST2 full-load & incremental → carrier events → Sensitech), with the
 full-load stages keyed on `load_timestamp` and the rest on `audit_timestamp`.
@@ -149,7 +152,13 @@ non-cancelled ROME orders are replayed against carrier events and the
 expected milestone maps, producing ~40 issue flags per order (missing /
 unordered / after-delivery events, missing flight, POD, address fields, …)
 defined in `backend/app/carrier_config.py` alongside each carrier's
-delivery/cancellation event vocabulary. Results group into a per-carrier
+delivery/cancellation event vocabulary. Transport mode is read from
+`etl.shipment.modeoftransportation` (not inferred from flight-number presence,
+which was circular — an Air order missing its flight number was classified
+Road, suppressing the very flag that should fire). A **mode-mismatch** flag
+catches orders marked Road that carry air indicators (airport IATA / flight
+details) with no flight number — likely mislabelled; the shipment detail page
+raises the same flag from the GPS speed/ghost inference. Results group into a per-carrier
 issue tracker; select issues and generate the carrier email — editable
 template (to/cc/subject/intro/signature, persisted locally), HTML preview,
 **.eml download** (opens in Outlook as an unsent draft via `X-Unsent`),

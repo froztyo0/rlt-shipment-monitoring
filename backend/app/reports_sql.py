@@ -70,15 +70,36 @@ carrier_tracking AS (
     FROM latest_orders lo
 ),
 
+-- latest shipment-table mode per order (bounded to the window's orders)
+shipment_mode AS (
+    SELECT DISTINCT ON (sh.salesordernumber)
+        sh.salesordernumber, sh.modeoftransportation, sh.modeoftransportation_3a2
+    FROM etl.shipment sh
+    JOIN latest_orders lo ON lo.salesordernumber::text = sh.salesordernumber::text
+    ORDER BY sh.salesordernumber, sh.lastupdateddt DESC NULLS LAST
+),
+
+-- transport mode from etl.shipment.modeoftransportation directly. Deriving it
+-- from flightnumber presence was circular: an Air order MISSING its flight
+-- number was classified Road, which then suppressed the missing_flightnumber
+-- flag. Flight number is only a last-resort fallback when the mode is blank.
 transport_type AS (
     SELECT
         lo.salesordernumber,
-        CASE WHEN EXISTS (
+        CASE
+            WHEN sm.modeoftransportation ILIKE '%air%' OR sm.modeoftransportation ILIKE '%flight%'
+                 OR sm.modeoftransportation_3a2 ILIKE '%air%' THEN 'Air'
+            WHEN sm.modeoftransportation ILIKE '%road%' OR sm.modeoftransportation ILIKE '%ground%'
+                 OR sm.modeoftransportation ILIKE '%truck%' OR sm.modeoftransportation ILIKE '%drive%'
+                 OR sm.modeoftransportation ILIKE '%courier%' THEN 'Road'
+            WHEN EXISTS (
                 SELECT 1 FROM etl.carrier_inbound c
                 WHERE c.salesordernumber::text = lo.salesordernumber::text
-                  AND NULLIF(BTRIM(c.flightnumber::text), '') IS NOT NULL)
-             THEN 'Air' ELSE 'Road' END AS derived_mode
+                  AND NULLIF(BTRIM(c.flightnumber::text), '') IS NOT NULL) THEN 'Air'
+            ELSE 'Road'
+        END AS derived_mode
     FROM latest_orders lo
+    LEFT JOIN shipment_mode sm ON sm.salesordernumber::text = lo.salesordernumber::text
 ),
 
 expected_events AS (
@@ -357,7 +378,20 @@ issue_flags AS (
          AND COALESCE(cdf.has_pod_documents, 0) = 0)::boolean AS missing_pod_documents,
         (COALESCE(cdf.has_delay_event, 0) = 1
          AND COALESCE(cdf.has_delay_reason, 0) = 0)::boolean AS missing_delay_reason,
-        (COALESCE(cdf.has_shipment_type, 0) = 0)::boolean AS missing_shipment_type
+        (COALESCE(cdf.has_shipment_type, 0) = 0)::boolean AS missing_shipment_type,
+
+        -- mode mismatch: marked Road, no flight number, yet the carrier feed
+        -- carries air indicators (airport IATA / flight details) → likely flew
+        (tt.derived_mode = 'Road'
+         AND COALESCE(cdf.has_flightnumber, 0) = 0
+         AND EXISTS (
+             SELECT 1 FROM etl.carrier_inbound c
+             WHERE c.salesordernumber::text = lo.salesordernumber::text
+               AND (NULLIF(TRIM(c.departure_airport_iata::text), '') IS NOT NULL
+                    OR NULLIF(TRIM(c.arrival_airport_iata::text), '') IS NOT NULL
+                    OR (NULLIF(TRIM(c.flight_details::text), '') IS NOT NULL
+                        AND LOWER(TRIM(c.flight_details::text)) <> 'null'))
+         ))::boolean AS mode_mismatch_air
 
     FROM latest_orders lo
     LEFT JOIN latest_carrier lc ON lc.salesordernumber::text = lo.salesordernumber::text
@@ -390,7 +424,7 @@ SELECT *,
      OR missing_carrier_trackingid OR missing_tracking_url
      OR missing_pod_name OR missing_pod_department OR missing_pod_signature
      OR missing_pod_image OR missing_pod_documents OR missing_delay_reason
-     OR missing_shipment_type) AS has_any_carrier_issue
+     OR missing_shipment_type OR mode_mismatch_air) AS has_any_carrier_issue
 FROM issue_flags
 WHERE (unordered_events OR missing_events OR milestone_flag_missing
      OR event_after_delivery OR is_cancelled OR milestone_flag_only_1
@@ -408,7 +442,7 @@ WHERE (unordered_events OR missing_events OR milestone_flag_missing
      OR missing_carrier_trackingid OR missing_tracking_url
      OR missing_pod_name OR missing_pod_department OR missing_pod_signature
      OR missing_pod_image OR missing_pod_documents OR missing_delay_reason
-     OR missing_shipment_type)
+     OR missing_shipment_type OR mode_mismatch_air)
   -- carrier filter pushed into SQL so the LIMIT can't strip a requested
   -- carrier's rows before the API filters ($3 = uppercased carrier list or NULL)
   AND ($3::text[] IS NULL OR UPPER(TRIM(carriername::text)) = ANY($3))

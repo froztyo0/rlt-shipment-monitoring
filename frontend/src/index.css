@@ -112,3 +112,24 @@ body {
 .leaflet-popup-content-wrapper, .leaflet-popup-tip {
   background: var(--surface-1); color: var(--text-primary);
 }
+
+/* minimal map marker labels — plain text, no box */
+.leaflet-tooltip.map-label {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 600;
+  text-shadow: 0 1px 3px var(--surface-0), 0 0 2px var(--surface-0);
+}
+.leaflet-tooltip.map-label::before { display: none; }
+
+/* live pulse ring for the current-position marker */
+@keyframes mapPulse {
+  0%   { transform: scale(1);   opacity: 0.45; }
+  70%  { transform: scale(2.6); opacity: 0; }
+  100% { opacity: 0; }
+}
+.map-pulse-ring { animation: mapPulse 1.9s ease-out infinite; }

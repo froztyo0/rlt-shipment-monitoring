@@ -179,7 +179,9 @@ export default function ShipmentDetailPage() {
             <>
               <MapControls layers={mapLayers} setLayers={setMapLayers} data={pings.data!} />
               <div className="relative">
-                <ShipmentMap data={pings.data!} layers={mapLayers} visibleCount={scrub} />
+                <ShipmentMap data={pings.data!} layers={mapLayers} visibleCount={scrub}
+                  delivered={status.label === "Delivered" || status.label === "Cancelled"}
+                  roadMode={/road|ground|truck|drive|courier/i.test(String(s.modeoftransportation ?? ""))} />
                 <TripStatsCard s={s} pings={pings.data!} />
               </div>
               <PingScrubber pings={pings.data!} scrub={scrub} setScrub={setScrub} />
@@ -572,8 +574,23 @@ function Banners({ s, issues, rca, pings }: { s: Dict; issues: Dict[]; rca: Dict
         (fmt.ago(s.lastgps) ? ` (${fmt.ago(s.lastgps)})` : "") + ".",
     });
   }
+  // speed-logic transport-mode mismatch: GPS shows a flight but the shipment
+  // is recorded as Road with no flight number → likely mislabelled mode
+  const airLegs = pings?.flight_segments?.length ?? 0;
+  const modeStr = String(s.modeoftransportation ?? "").toLowerCase();
+  const looksAir = /air|flight/.test(modeStr) || String(s.transportmode_flight ?? "").trim() !== "";
+  const flightMissing = String(s.flightnumber ?? "").trim() === "";
+  if (airLegs > 0 && !looksAir && flightMissing) {
+    banners.push({
+      severity: "serious",
+      text:
+        `Air travel detected from GPS speed (${airLegs} inferred flight leg${airLegs === 1 ? "" : "s"}), ` +
+        `but this shipment is recorded as “${s.modeoftransportation || "Road"}” with no flight number — ` +
+        `likely a mislabelled transport mode. Confirm the mode and capture the flight details.`,
+    });
+  }
   for (const i of issues) {
-    if (banners.length >= 4) break;
+    if (banners.length >= 5) break;
     if (i.severity === "critical" && i.code !== "stale_injection") {
       banners.push({ severity: "critical", text: `${i.label} — ${i.hint}` });
     }
