@@ -54,14 +54,20 @@ latest_carrier AS (
     WHERE rn = 1
 ),
 
--- best non-blank carrier tracking id across ALL of the order's carrier events
--- (the latest row is frequently blank), so the report/email always carry it
+-- carrier tracking id: best non-blank from the order's carrier events, and
+-- if the carrier feed never carried one, fall back to the shipment table's
+-- carriertrackingnumber (same source the dashboard/sales orders come from)
 carrier_tracking AS (
-    SELECT c.salesordernumber,
-           MAX(NULLIF(TRIM(c.carrier_trackingid::text), '')) AS carrier_trackingid
-    FROM etl.carrier_inbound c
-    JOIN latest_orders lo ON lo.salesordernumber::text = c.salesordernumber::text
-    GROUP BY c.salesordernumber
+    SELECT lo.salesordernumber,
+           COALESCE(
+               (SELECT MAX(NULLIF(TRIM(c.carrier_trackingid::text), ''))
+                  FROM etl.carrier_inbound c
+                 WHERE c.salesordernumber::text = lo.salesordernumber::text),
+               (SELECT MAX(NULLIF(TRIM(sh.carriertrackingnumber::text), ''))
+                  FROM etl.shipment sh
+                 WHERE sh.salesordernumber::text = lo.salesordernumber::text)
+           ) AS carrier_trackingid
+    FROM latest_orders lo
 ),
 
 transport_type AS (

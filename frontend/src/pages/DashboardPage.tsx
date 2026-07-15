@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, fmt, Dict, ListResponse } from "../api";
 import {
-  BarList, ErrorBox, IssueChips, KpiTile, Panel, SEV_COLOR, SEV_ICON, SeverityBadge, Spinner, useApi,
+  BarList, ErrorBox, KpiTile, Panel, SEV_COLOR, SEV_ICON, SeverityBadge, Spinner, useApi,
 } from "../components/ui";
 
 interface Filters {
@@ -440,6 +440,25 @@ const modeIcon = (m: any) => {
   return "";
 };
 
+// compact issue cell: one severity-colored count pill (details on hover / expand)
+function IssueSummary({ s }: { s: Dict }) {
+  const issues = s.issues ?? [];
+  if (!issues.length) {
+    return <span className="whitespace-nowrap text-xs" style={{ color: "var(--status-good)" }}>✓ clean</span>;
+  }
+  const sev = s.max_severity ?? "info";
+  return (
+    <span
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium"
+      style={{ borderColor: SEV_COLOR[sev] }}
+      title={issues.map((i: Dict) => `• ${i.label}`).join("\n")}
+    >
+      <span style={{ color: SEV_COLOR[sev] }}>{SEV_ICON[sev]}</span>
+      {s.issue_count} issue{s.issue_count === 1 ? "" : "s"}
+    </span>
+  );
+}
+
 function ShipmentTable({
   data, sort, dir, onSort, onPage,
 }: {
@@ -461,21 +480,21 @@ function ShipmentTable({
 
   return (
     <div>
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-[13px]">
+      <div className="overflow-x-auto rounded-xl border border-edge">
+        <table className="w-full min-w-[1000px] border-collapse text-[13px]">
           <thead>
-            <tr className="border-b border-baseline text-left">
-              <th className="w-6 px-1 py-1.5" />
+            <tr className="text-left">
+              <th className="sticky top-0 z-10 w-8 border-b border-baseline bg-surface-1 px-2 py-2.5" />
               {COLS.map((c) => (
                 <th
                   key={c.key}
                   onClick={c.sortable ? () => onSort(c.key) : undefined}
-                  className={`whitespace-nowrap px-2 py-1.5 text-xs font-medium text-ink-3 ${
+                  className={`sticky top-0 z-10 whitespace-nowrap border-b border-baseline bg-surface-1 px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-ink-3 ${
                     c.sortable ? "cursor-pointer select-none hover:text-ink" : ""
                   }`}
                 >
                   {c.label}
-                  {sort === c.key && <span className="ml-0.5">{dir === "desc" ? "↓" : "↑"}</span>}
+                  {sort === c.key && <span className="ml-1 text-s1">{dir === "desc" ? "↓" : "↑"}</span>}
                 </th>
               ))}
             </tr>
@@ -486,57 +505,65 @@ function ShipmentTable({
               const isOpen = open.has(k);
               return (
                 <Fragment key={k}>
-                  <tr className={`border-b border-grid hover:bg-surface-0 ${isOpen ? "bg-surface-0" : ""}`}>
-                    <td className="px-1 py-1.5 align-top">
+                  <tr className={`group border-t border-grid transition-colors first:border-t-0 hover:bg-surface-0 ${isOpen ? "bg-surface-0" : ""}`}>
+                    <td className="px-2 py-2.5 align-middle">
                       <button onClick={() => toggle(k)}
-                        className="flex h-5 w-5 items-center justify-center rounded text-ink-3 hover:bg-edge hover:text-ink"
+                        className="flex h-6 w-6 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-edge hover:text-ink"
                         title={isOpen ? "Collapse" : "Show all fields"}>
-                        <span className={`transition-transform ${isOpen ? "rotate-90" : ""}`}>▸</span>
+                        <span className={`inline-block text-[10px] transition-transform ${isOpen ? "rotate-90" : ""}`}>▶</span>
                       </button>
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1.5">
+                    <td className="whitespace-nowrap px-3 py-2.5">
                       {s.trackingnumber ? (
-                        <Link to={`/shipment/${encodeURIComponent(String(s.trackingnumber))}`} className="font-medium text-s1 hover:underline">
+                        <Link to={`/shipment/${encodeURIComponent(String(s.trackingnumber))}`}
+                          className="tnum rounded-md px-1.5 py-0.5 font-medium text-s1 hover:underline"
+                          style={{ background: "color-mix(in srgb, var(--series-1) 12%, transparent)" }}>
                           {s.trackingnumber}
                         </Link>
                       ) : s.salesordernumber ? (
                         <Link to={`/shipment/${encodeURIComponent(String(s.salesordernumber))}`} className="text-ink-2 hover:underline" title="No sensitech tracking number — opening by sales order">
-                          (via SO)
+                          via SO
                         </Link>
                       ) : "—"}
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.text(s.salesordernumber)}</td>
-                    <td className="max-w-[130px] truncate px-2 py-1.5" title={s.product ?? ""}>{fmt.text(s.product)}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.text(s.batchnumber)}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5">{fmt.text(s.carrier)}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-ink-2" title={s.modeoftransportation ?? ""}>
-                      {modeIcon(s.modeoftransportation)} {fmt.text(s.modeoftransportation)}
-                    </td>
-                    <td className="max-w-[150px] truncate px-2 py-1.5 text-ink-2" title={`${s.origin ?? ""} → ${s.destinationname ?? ""}`}>
-                      {fmt.text(s.origin)} → {fmt.text(s.destinationname)}
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-ink-2">{fmt.text(s.region)}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5">
-                      {fmt.text(s.currentmilestone)}
-                      {s.currentleg && s.totallegs ? (
-                        <span className="ml-1 text-[11px] text-ink-3">leg {s.currentleg}/{s.totallegs}</span>
-                      ) : null}
-                    </td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.date(s.injectiondate)}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tnum">{fmt.date(s.planneddeliverydate)}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tnum text-ink-2">{fmt.dt(s.etadeliverytime)}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5">
-                      {s.risk || s.riskbucket ? (
-                        <SeverityBadge severity={riskSeverity(s)} label={String(s.riskbucket || s.risk)} />
+                    <td className="whitespace-nowrap px-3 py-2.5 tnum text-ink-2">{fmt.text(s.salesordernumber)}</td>
+                    <td className="max-w-[140px] truncate px-3 py-2.5 font-medium" title={s.product ?? ""}>{fmt.text(s.product)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 tnum text-ink-2">{fmt.text(s.batchnumber)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5">
+                      {s.carrier ? (
+                        <span className="rounded border border-edge px-1.5 py-0.5 text-[11px] font-medium">{s.carrier}</span>
                       ) : "—"}
                     </td>
-                    <td className="px-2 py-1.5"><IssueChips issues={s.issues} /></td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tnum text-ink-3">{fmt.dt(s.lastupdateddt)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-ink-2" title={s.modeoftransportation ?? ""}>
+                      <span className="mr-1 text-ink-3">{modeIcon(s.modeoftransportation)}</span>{fmt.text(s.modeoftransportation)}
+                    </td>
+                    <td className="max-w-[160px] truncate px-3 py-2.5 text-ink-2" title={`${s.origin ?? ""} → ${s.destinationname ?? ""}`}>
+                      <span className="text-ink-3">{fmt.text(s.origin)}</span>
+                      <span className="mx-1 text-ink-3">→</span>
+                      {fmt.text(s.destinationname)}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-ink-2">{fmt.text(s.region)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5">
+                      {fmt.text(s.currentmilestone)}
+                      {s.currentleg && s.totallegs ? (
+                        <span className="ml-1 rounded bg-grid px-1 py-px text-[10px] text-ink-3">leg {s.currentleg}/{s.totallegs}</span>
+                      ) : null}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2.5 tnum">{fmt.date(s.injectiondate)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 tnum text-ink-2">{fmt.date(s.planneddeliverydate)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 tnum text-ink-2">{fmt.dt(s.etadeliverytime)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5">
+                      {s.risk || s.riskbucket ? (
+                        <SeverityBadge severity={riskSeverity(s)} label={String(s.riskbucket || s.risk)} />
+                      ) : <span className="text-ink-3">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5"><IssueSummary s={s} /></td>
+                    <td className="whitespace-nowrap px-3 py-2.5 tnum text-ink-3">{fmt.dt(s.lastupdateddt)}</td>
                   </tr>
                   {isOpen && (
-                    <tr className="border-b border-grid">
+                    <tr className="bg-surface-0">
                       <td />
-                      <td colSpan={TOTAL_COLS - 1} className="px-2 pb-3 pt-1">
+                      <td colSpan={TOTAL_COLS - 1} className="px-3 pb-3 pt-0.5">
                         <RowDetail s={s} />
                       </td>
                     </tr>
@@ -546,7 +573,7 @@ function ShipmentTable({
             })}
             {data.items.length === 0 && (
               <tr>
-                <td colSpan={TOTAL_COLS} className="px-2 py-8 text-center text-sm text-ink-3">
+                <td colSpan={TOTAL_COLS} className="px-3 py-10 text-center text-sm text-ink-3">
                   No shipments match the current filters.
                 </td>
               </tr>
@@ -601,6 +628,7 @@ function RowDetail({ s }: { s: Dict }) {
       ["Route status", s.routestatus], ["Risk", s.riskbucket || s.risk], ["Risk reason", s.risk_reason],
       ["Delay reason", s.delayreason], ["Alerts", s.countofalerts && Number(s.countofalerts) > 0 ? `${s.countofalerts} · ${fmt.text(s.alertstitle)}` : null],
       ["POD", s.podname || s.pod_receival_time],
+      ["Data issues", (s.issues ?? []).length ? (s.issues as Dict[]).map((i) => i.label).join(", ") : null],
     ]},
   ];
   return (
