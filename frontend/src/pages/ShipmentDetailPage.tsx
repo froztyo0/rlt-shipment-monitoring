@@ -113,11 +113,26 @@ export default function ShipmentDetailPage() {
         )}
       </div>
 
-      {/* ---- shipment KPI strip --------------------------------------------- */}
-      <KpiStrip s={s} pings={pings.data ?? null} status={status.label} />
+      {/* ---- decision hero: will it arrive in time & still be usable? -------- */}
+      <DecisionHero s={s} dose={dose.data ?? null} status={status} pings={pings.data ?? null} />
 
-      {/* ---- alert banners --------------------------------------------------- */}
+      {/* ---- alert banners + root cause (the "what's wrong" cluster) --------- */}
       <Banners s={s} issues={issues} rca={rca} pings={pings.data ?? null} />
+      {rca && (
+        <Panel title="⛔ Injection date passed — root cause analysis">
+          <div className="mb-2 text-sm font-medium" style={{ color: SEV_COLOR.critical }}>
+            {rca.verdict_label}
+          </div>
+          <ul className="flex flex-col gap-1 text-[13px]">
+            {rca.evidence.map((e: Dict, i: number) => (
+              <li key={i} className="flex gap-2">
+                <span className="w-24 shrink-0 text-ink-3">{e.source}</span>
+                <span className="text-ink-2">{e.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
 
       {/* ---- milestone progress stepper ------------------------------------- */}
       {miles.data && <MilestoneStepper data={miles.data} />}
@@ -199,38 +214,31 @@ export default function ShipmentDetailPage() {
         <MilestonePanel miles={miles} so={String(s.salesordernumber ?? "")} />
       </div>
 
-      {/* ---- order lifecycle / data provenance -------------------------------- */}
-      <Panel title="Order lifecycle — where each event came from">
-        {lifecycle.loading ? (
-          <Spinner label="Tracing sources…" />
-        ) : lifecycle.error ? (
-          <ErrorBox error={lifecycle.error} />
-        ) : (
-          <LifecycleTimeline data={lifecycle.data!} />
-        )}
-      </Panel>
+      {/* ---- diagnostics (progressive disclosure — collapsed by default) ------ */}
+      <details className="group rounded-lg border border-edge bg-surface-1 p-3.5">
+        <summary className="flex cursor-pointer items-center gap-2 text-[13px] font-semibold tracking-tight">
+          <span className="text-ink-3 transition-transform group-open:rotate-90">▸</span>
+          Order lifecycle — where each event came from
+        </summary>
+        <div className="mt-3">
+          {lifecycle.loading ? (
+            <Spinner label="Tracing sources…" />
+          ) : lifecycle.error ? (
+            <ErrorBox error={lifecycle.error} />
+          ) : (
+            <LifecycleTimeline data={lifecycle.data!} />
+          )}
+        </div>
+      </details>
 
-      {/* ---- RCA -------------------------------------------------------------- */}
-      {rca && (
-        <Panel title="⛔ Injection date passed — root cause analysis">
-          <div className="mb-2 text-sm font-medium" style={{ color: SEV_COLOR.critical }}>
-            {rca.verdict_label}
-          </div>
-          <ul className="flex flex-col gap-1 text-[13px]">
-            {rca.evidence.map((e: Dict, i: number) => (
-              <li key={i} className="flex gap-2">
-                <span className="w-24 shrink-0 text-ink-3">{e.source}</span>
-                <span className="text-ink-2">{e.detail}</span>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      )}
-
-      {/* ---- source tracing ----------------------------------------------------- */}
       {traces.length > 0 && (
-        <Panel title="Missing-field source tracing">
-          <table className="w-full text-[13px]">
+        <details className="group rounded-lg border border-edge bg-surface-1 p-3.5">
+          <summary className="flex cursor-pointer items-center gap-2 text-[13px] font-semibold tracking-tight">
+            <span className="text-ink-3 transition-transform group-open:rotate-90">▸</span>
+            Missing-field source tracing
+            <span className="rounded-full bg-grid px-1.5 py-0.5 text-[11px] font-normal text-ink-2">{traces.length}</span>
+          </summary>
+          <table className="mt-3 w-full text-[13px]">
             <thead>
               <tr className="border-b border-baseline text-left text-xs text-ink-3">
                 <th className="px-2 py-1">Field</th><th className="px-2 py-1">Verdict</th>
@@ -253,12 +261,13 @@ export default function ShipmentDetailPage() {
               ))}
             </tbody>
           </table>
-        </Panel>
+        </details>
       )}
 
       {/* ---- everything else ----------------------------------------------------- */}
-      <details className="rounded-lg border border-edge bg-surface-1 p-3.5">
-        <summary className="cursor-pointer text-[13px] font-semibold tracking-tight">
+      <details className="group rounded-lg border border-edge bg-surface-1 p-3.5">
+        <summary className="flex cursor-pointer items-center gap-2 text-[13px] font-semibold tracking-tight">
+          <span className="text-ink-3 transition-transform group-open:rotate-90">▸</span>
           All shipment fields
         </summary>
         <div className="mt-3 grid grid-cols-2 gap-2.5 text-sm sm:grid-cols-3 lg:grid-cols-6">
@@ -307,6 +316,101 @@ function MetaItem({ label, value }: { label: string; value: string }) {
 
 /* consolidated order-details card (full width): route on the left, the order /
    dose spec grid on the right — replaces the old journey strip + dose-facts bar. */
+/* Decision hero — the four questions a coordinator triages a dose by, answered
+   at a glance and colour-graded by urgency: will it arrive before the injection
+   deadline, and will the dose still be usable when it does. */
+const SEV_RANK = ["critical", "serious", "warning", "info", "good"];
+const DOSE_TONE: Record<string, string> = {
+  underdosed: "critical", will_underdose: "serious", pre_window: "info", in_window: "good",
+};
+
+function DecisionHero({ s, dose, status, pings }: {
+  s: Dict; dose: Dict | null; status: { label: string; sev: string }; pings: PingsResponse | null;
+}) {
+  const now = Date.now();
+  const delivered = status.label === "Delivered";
+  const cancelled = status.label === "Cancelled";
+  const injTs = parseTs(dose?.calibration_time) ?? parseTs(s.injectiondate);
+  const eta = parseTs(s.etadeliverytime);
+  const injMs = injTs ? injTs.getTime() - now : null;
+  const slackMs = injTs && eta ? injTs.getTime() - eta.getTime() : null;
+  const lastGps = pings?.summary?.last_ping ?? s.lastgps;
+
+  // 1 — injection deadline
+  const overdue = injMs != null && injMs < 0 && !delivered && !cancelled;
+  const deadline = {
+    label: "Injection deadline",
+    value: injMs == null ? "—" : delivered ? "met" : overdue ? `${fmt.dur(-injMs)} overdue` : `in ${fmt.dur(injMs)}`,
+    sub: injTs ? `${fmt.date(s.injectiondate)}${s.injectiontime ? ` · ${s.injectiontime}` : ""}` : "no injection date",
+    tone: delivered ? "good" : overdue ? "critical" : injMs != null && injMs < 24 * 3.6e6 ? "serious" : "info",
+  };
+
+  // 2 — delivery vs the deadline
+  let delivery: { label: string; value: string; sub: string; tone: string };
+  if (delivered) {
+    delivery = { label: "Delivery", value: "Delivered", sub: fmt.dt(s.actualdeliverytime), tone: "good" };
+  } else if (cancelled) {
+    delivery = { label: "Delivery", value: "Cancelled", sub: fmt.text(s.delayreason), tone: "critical" };
+  } else if (eta) {
+    delivery = {
+      label: "Projected delivery",
+      value: fmt.dt(s.etadeliverytime),
+      sub: slackMs == null ? "ETA (no deadline)" : slackMs >= 0 ? `${fmt.dur(slackMs)} before deadline` : `${fmt.dur(-slackMs)} past deadline`,
+      tone: slackMs == null ? "info" : slackMs < 0 ? "critical" : slackMs < 12 * 3.6e6 ? "serious" : "good",
+    };
+  } else {
+    delivery = { label: "Projected delivery", value: "no ETA", sub: "carrier ETA not provided", tone: "warning" };
+  }
+
+  // 3 — dose activity (decay)
+  const dose_ = dose?.has_dose
+    ? {
+        label: "Dose activity",
+        value: `${fmt.num(dose.activity_now_pct)}%`,
+        sub: dose.verdict === "in_window" ? "within usable window"
+          : dose.verdict === "underdosed" ? "below usable — likely wasted"
+          : dose.verdict === "will_underdose" ? "will fall below usable"
+          : "hotter than prescribed",
+        tone: DOSE_TONE[dose.verdict] ?? "info",
+      }
+    : { label: "Dose activity", value: "—", sub: dose ? "no dose data on file" : "loading…", tone: "info" };
+
+  // 4 — where it is now
+  const location = {
+    label: "Location & status",
+    value: fmt.text(s.currentmilestone),
+    sub: `${status.label}${lastGps ? ` · GPS ${fmt.ago(lastGps) ?? fmt.dt(lastGps)}` : ""}`,
+    tone: status.sev,
+  };
+
+  const tiles = [deadline, delivery, dose_, location];
+  const worst = SEV_RANK.find((t) => tiles.some((x) => x.tone === t)) ?? "info";
+  const valColor = (tone: string) => (tone === "info" ? "var(--text-primary)" : SEV_COLOR[tone]);
+
+  return (
+    <div className="overflow-hidden rounded-xl border bg-surface-1 shadow-sm"
+         style={{ borderColor: `color-mix(in srgb, ${SEV_COLOR[worst]} 55%, var(--border))` }}>
+      <div className="h-1" style={{ background: SEV_COLOR[worst] }} />
+      <div className="grid grid-cols-2 lg:grid-cols-4">
+        {tiles.map((t, i) => (
+          <div key={t.label}
+               className={`px-4 py-3.5 ${i % 2 === 1 ? "border-l border-grid" : ""} ${i >= 2 ? "border-t border-grid" : ""} lg:border-t-0 ${i > 0 ? "lg:border-l lg:border-grid" : ""}`}>
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-ink-3">
+              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: SEV_COLOR[t.tone] }} />
+              {t.label}
+            </div>
+            <div className="mt-1.5 truncate text-[19px] font-semibold leading-tight"
+                 style={{ color: valColor(t.tone) }} title={t.value}>
+              {t.value}
+            </div>
+            <div className="mt-0.5 truncate text-xs text-ink-3" title={t.sub}>{t.sub}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function OrderDetails({ s }: { s: Dict }) {
   return (
     <Panel title="Order details">
@@ -994,22 +1098,23 @@ function Banners({ s, issues, rca, pings }: { s: Dict; issues: Dict[]; rca: Dict
 
 /* ---- floating stats card over the map (delta / departed / ETA / GPS) -------- */
 function TripStatsCard({ s, pings }: { s: Dict; pings: PingsResponse }) {
-  const rows: [string, ReactNode][] = [
-    ["Delta", s.delta ?? "—"],
-    ["Departed", fmt.dt(s.actualdeparted)],
-    ["ETA delivery", fmt.dt(s.etadeliverytime)],
-    ["Latest GPS ping", fmt.ago(pings.summary.last_ping ?? s.lastgps) ?? fmt.dt(s.lastgps)],
-    ["Latest update", fmt.dt(s.lastupdateddt)],
-    ["Distance", s.distance ? `${s.distance} km` : "—"],
-  ];
+  const rows = ([
+    ["Departed", s.actualdeparted ? fmt.dt(s.actualdeparted) : null],
+    ["ETA", s.etadeliverytime ? fmt.dt(s.etadeliverytime) : null],
+    ["Last GPS", fmt.ago(pings.summary.last_ping ?? s.lastgps) ?? (s.lastgps ? fmt.dt(s.lastgps) : null)],
+    ["Distance", s.distance ? `${s.distance} km` : null],
+  ] as [string, string | null][]).filter(([, v]) => v);
+  if (!rows.length) return null;
   return (
-    <div className="absolute left-3 top-3 z-[1000] w-52 rounded-md border border-edge bg-surface-1/95 p-3 shadow-md backdrop-blur">
-      {rows.map(([k, v]) => (
-        <div key={k} className="mb-2 last:mb-0">
-          <div className="text-[10px] uppercase tracking-wide text-ink-3">{k}</div>
-          <div className="text-[13px] font-medium">{v}</div>
-        </div>
-      ))}
+    <div className="absolute left-3 top-3 z-[1000] max-w-[210px] rounded-lg border border-edge bg-surface-1/90 px-3 py-2 shadow-md backdrop-blur">
+      <div className="flex flex-col gap-1 text-[11px]">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex items-baseline justify-between gap-4">
+            <span className="text-ink-3">{k}</span>
+            <span className="tnum font-medium">{v}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
