@@ -11,7 +11,10 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from .. import airports
+from datetime import datetime, timedelta, timezone
+
+from .. import airports, decay
+from ..cache import cached
 from ..config import get_settings
 from ..db import fetch_all
 from ..analysis import quality as q
@@ -21,6 +24,53 @@ from ..analysis.rca import stale_injection_rca, trace_missing_fields
 from ..geo import parse_coord, valid_lat_lon
 
 router = APIRouter(prefix="/api/shipments", tags=["shipment-detail"])
+
+
+def _dt(v):
+    """Parse to a naive-UTC datetime. asyncpg returns timestamptz as tz-aware
+    UTC; text columns may carry any offset (e.g. '+02:00'). We convert aware
+    values to UTC *before* dropping tzinfo so every datetime the dose math sees
+    lives in one consistent naive-UTC space (matching now = utcnow)."""
+    if v is None:
+        return None
+    d = v if isinstance(v, datetime) else None
+    if d is None:
+        try:
+            d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if d.tzinfo is not None:
+        d = d.astimezone(timezone.utc)
+    return d.replace(tzinfo=None)
+
+
+def _iso_z(d):
+    """ISO-8601 stamped with an explicit UTC 'Z'. Our datetimes are naive-UTC
+    (see _dt / now=utcnow); emitting the marker makes the frontend read the same
+    instant whether it goes through new Date() (fmt.dt) or parseTs."""
+    return (d.isoformat() + "Z") if d is not None else None
+
+
+def _combine_date_time(date_v, time_v):
+    import re
+    d = _dt(date_v)
+    if not d:
+        m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", str(date_v or ""))
+        if m:
+            d = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    if not d:
+        return None
+    if time_v:
+        m = re.search(r"(\d{1,2}):(\d{2})\s*([AaPp][Mm])?", str(time_v))
+        if m:
+            h, mn, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").upper()
+            if ap == "PM" and h < 12:
+                h += 12
+            elif ap == "AM" and h == 12:
+                h = 0
+            if 0 <= h <= 23:
+                return d.replace(hour=h, minute=mn)
+    return d
 
 
 async def _get_group(tracking: str, so: Optional[str] = None) -> tuple[dict, list[dict]]:
@@ -72,6 +122,155 @@ def _order_summary(r: dict) -> dict:
         "injectiondate": r.get("injectiondate"),
         "carrier": r.get("carrier"),
         "issue_count": len(issues),
+    }
+
+
+# ---------------------------------------------------------------------------
+# decay & dose intelligence
+# ---------------------------------------------------------------------------
+# Activity columns are OPTIONAL on the real schema — we never assume they
+# exist. We read information_schema first and NULL-alias whatever is absent,
+# so a table without dose data degrades to has_dose:false instead of 500-ing.
+_DOSE_VALUE_COLS = ["planned_activity", "planned_mbq", "mbq", "gbq", "mci"]
+_DOSE_META_COLS = ["batch_no", "tinj_datetime", "texp", "volume",
+                   "batch_status", "production_site"]
+
+
+async def _table_columns(table: str) -> set[str]:
+    rows = await fetch_all(
+        """SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'etl' AND table_name = $1""",
+        table,
+    )
+    return {str(r["column_name"]).lower() for r in rows}
+
+
+async def _fetch_batch_activity(so_list: list[str]) -> Optional[dict]:
+    """Best-available batch row carrying dose data, over the incremental table
+    then the full-load fallback. Column-set is discovered at runtime so the
+    query only ever names columns that exist."""
+    for table, order_cands in (
+        ("threeagesttwo_batches_inbound", ("updatedt", "audit_timestamp")),
+        ("threeagesttwo_batches_inbound_fullload", ("load_timestamp", "audit_timestamp")),
+    ):
+        present = await cached(f"batchcols:{table}", 600, lambda t=table: _table_columns(t))
+        value_cols = [c for c in _DOSE_VALUE_COLS if c in present]
+        # need both an activity column AND the join key, else this table can't
+        # answer the query — skip it and degrade rather than 500 on the miss.
+        if not value_cols or "sales_order_id" not in present:
+            continue
+        wanted = ["sales_order_id"] + _DOSE_VALUE_COLS + _DOSE_META_COLS
+        select = ", ".join(c if c in present else f"NULL AS {c}" for c in wanted)
+        # ::text before COALESCE so a mixed numeric/text column layout on the
+        # real schema can't raise "COALESCE types ... cannot be matched".
+        coalesce = "COALESCE(" + ", ".join(f"{c}::text" for c in value_cols) + ") IS NOT NULL"
+        order_col = next((c for c in order_cands if c in present), None)
+        order = f"ORDER BY {order_col} DESC NULLS LAST" if order_col else ""
+        rows = await fetch_all(
+            f"""SELECT {select} FROM etl.{table}
+                WHERE sales_order_id::text = ANY($1::text[]) AND {coalesce}
+                {order} LIMIT 1""",
+            so_list,
+        )
+        if rows:
+            return rows[0]
+    return None
+
+
+@router.get("/{tracking}/dose")
+async def shipment_dose(tracking: str, so: Optional[str] = Query(default=None)):
+    """Radioactive-decay / delivered-activity model for the dose. All inputs
+    are existing batch columns (mbq/gbq/mci/planned_activity/tinj_datetime);
+    the physics is deterministic (no ML, no DB change)."""
+    sp, group = await _get_group(tracking, so)
+
+    # 3A GEST2 batch rows key on sales_order_id, which can match EITHER the ROME
+    # salesordernumber OR salesordernumber_3a2 — mirror lifecycle/rca and try
+    # both, else the panel silently vanishes for 3a2-keyed orders.
+    def _ids(r: dict) -> list[str]:
+        return [str(r.get(c) or "").strip()
+                for c in ("salesordernumber", "salesordernumber_3a2")]
+
+    primary_ids = [v for v in _ids(sp) if v]
+    group_ids = sorted({v for r in group for v in _ids(r) if v})
+
+    # prefer the selected/primary order's own batch; widen to the trip group
+    # only if that order carries no activity data.
+    b = await _fetch_batch_activity(primary_ids) if primary_ids else None
+    if not b and group_ids:
+        b = await _fetch_batch_activity(group_ids)
+
+    isotope = decay.isotope_for_product(sp.get("product"))
+    hl = decay.half_life_hours(isotope)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive-UTC, matches _dt
+
+    if not b:
+        return {
+            "has_dose": False, "isotope": isotope, "half_life_hours": round(hl, 2),
+            "reason": "No batch activity (mbq/gbq/planned_activity) found for this order in 3A GEST2.",
+        }
+
+    a0 = (decay._num(b.get("planned_activity")) or decay._num(b.get("planned_mbq"))
+          or decay.as_mbq(b.get("mbq"), b.get("gbq"), b.get("mci")))
+    # calibration reference = scheduled injection time (batch tinj, else shipment)
+    t0 = _dt(b.get("tinj_datetime")) or _combine_date_time(sp.get("injectiondate"), sp.get("injectiontime"))
+    if a0 is None or t0 is None:
+        return {
+            "has_dose": False, "isotope": isotope, "half_life_hours": round(hl, 2),
+            "reason": "Batch found but prescribed activity or injection/calibration time is missing.",
+        }
+
+    tol = get_settings().__dict__.get("dose_tolerance", 0.10) or 0.10
+    usable_low = a0 * (1 - tol)
+    usable_high = a0 * (1 + tol)
+    # activity stays usable until this many hours after calibration
+    usable_margin_h = decay.hours_to_fraction(hl, 1 - tol)
+    usable_until = t0 + timedelta(hours=usable_margin_h)
+
+    eta = _dt(sp.get("etadeliverytime"))
+    act_now = decay.activity_at(a0, t0, now, hl)
+    act_eta = decay.activity_at(a0, t0, eta, hl) if eta else None
+
+    if act_now < usable_low:
+        verdict, verdict_label = "underdosed", "Below usable activity now — likely wasted"
+    elif eta and act_eta is not None and act_eta < usable_low:
+        verdict, verdict_label = "will_underdose", "Projected to arrive below usable activity"
+    elif act_now > usable_high:
+        verdict, verdict_label = "pre_window", "More active than prescribed (before injection window)"
+    else:
+        verdict, verdict_label = "in_window", "Within the usable activity window"
+
+    span_start = min(t0 - timedelta(days=3), now - timedelta(days=1))
+    span_end = max(usable_until + timedelta(hours=12), now + timedelta(hours=6),
+                   (eta + timedelta(hours=6)) if eta else now)
+    curve = decay.build_curve(a0, t0, hl, span_start, span_end, points=64)
+
+    return {
+        "has_dose": True,
+        "isotope": isotope,
+        "half_life_hours": round(hl, 2),
+        "batch_no": b.get("batch_no"),
+        "production_site": b.get("production_site"),
+        "volume_ml": decay._num(b.get("volume")),
+        "prescribed_mbq": round(a0, 1),
+        "prescribed_gbq": decay.fmt_gbq(a0),
+        "prescribed_mci": decay.fmt_mci(a0),
+        "calibration_time": _iso_z(t0),               # = scheduled injection time (UTC)
+        "now": _iso_z(now),                            # server clock, naive-UTC
+        "activity_now_mbq": round(act_now, 1),
+        "activity_now_pct": round(100.0 * act_now / a0, 1),
+        "eta": _iso_z(eta),
+        "activity_at_eta_mbq": round(act_eta, 1) if act_eta is not None else None,
+        "activity_at_eta_pct": round(100.0 * act_eta / a0, 1) if act_eta is not None else None,
+        "tolerance": tol,
+        "usable_low_mbq": round(usable_low, 1),
+        "usable_high_mbq": round(usable_high, 1),
+        "usable_until": _iso_z(usable_until),
+        "decay_margin_hours": round((usable_until - now).total_seconds() / 3600.0, 1),
+        "vial_expiry": _iso_z(_dt(b.get("texp"))),
+        "verdict": verdict,
+        "verdict_label": verdict_label,
+        "curve": curve,
     }
 
 

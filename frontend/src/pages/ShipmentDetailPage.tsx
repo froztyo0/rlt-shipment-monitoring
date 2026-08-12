@@ -37,6 +37,12 @@ export default function ShipmentDetailPage() {
     [tracking, so]
   );
   const lifecycle = useApi<Dict>(() => api(`/api/shipments/${enc(tracking)}/lifecycle`), [tracking]);
+  // no keepPrevious: on an SO switch we must never show the previous order's
+  // dose numbers against the newly-selected order (they are clinically labelled).
+  const dose = useApi<Dict>(
+    () => api(`/api/shipments/${enc(tracking)}/dose`, so ? { so } : undefined),
+    [tracking, so]
+  );
 
   if (detail.loading) return <Spinner label="Loading shipment…" />;
   if (detail.error) return <ErrorBox error={detail.error} />;
@@ -52,20 +58,59 @@ export default function ShipmentDetailPage() {
   const status = shipmentStatus(s);
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* ---- header --------------------------------------------------------- */}
-      <div className="flex flex-wrap items-center gap-3">
-        <Link to="/" className="text-sm text-s1 hover:underline">← Back</Link>
-        <h1 className="tnum text-lg font-semibold tracking-tight">{fmt.text(s.trackingnumber ?? tracking)}</h1>
-        <span className="rounded-full px-2.5 py-0.5 text-xs font-medium"
-          style={{ background: `color-mix(in srgb, ${SEV_COLOR[status.sev]} 16%, transparent)`, color: "var(--text-primary)" }}>
-          {status.label}
-        </span>
-        {riskLabel && <SeverityBadge severity={riskSev} label={`risk: ${riskLabel}`} />}
-        <span className="text-xs text-ink-3">SO {fmt.text(s.salesordernumber)}</span>
-        <span className="ml-auto text-xs text-ink-3">
-          Updated {fmt.ago(s.lastupdateddt) ?? fmt.dt(s.lastupdateddt)}
-        </span>
+    <div className="flex flex-col gap-4">
+      {/* ---- page header --------------------------------------------------- */}
+      <div className="rounded-lg border border-edge bg-surface-1 px-4 py-3.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Link to="/" className="text-sm text-s1 hover:underline">← Back</Link>
+          <h1 className="tnum text-xl font-semibold tracking-tight">{fmt.text(s.trackingnumber ?? tracking)}</h1>
+          <span className="rounded-full px-2.5 py-0.5 text-xs font-medium"
+            style={{ background: `color-mix(in srgb, ${SEV_COLOR[status.sev]} 16%, transparent)`, color: "var(--text-primary)" }}>
+            {status.label}
+          </span>
+          {riskLabel && <SeverityBadge severity={riskSev} label={`risk: ${riskLabel}`} />}
+          {s.product && (
+            <span className="rounded border border-edge px-2 py-0.5 text-xs font-medium text-ink-2">
+              {fmt.text(s.product)}
+            </span>
+          )}
+          <span className="ml-auto text-xs text-ink-3">
+            Updated {fmt.ago(s.lastupdateddt) ?? fmt.dt(s.lastupdateddt)}
+          </span>
+        </div>
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <MetaItem label="Sales order" value={fmt.text(s.salesordernumber)} />
+          {s.carrier && <MetaItem label="Carrier" value={fmt.text(s.carrier)} />}
+          <MetaItem label="Mode" value={fmt.text(s.modeoftransportation)} />
+          {s.region && <MetaItem label="Region" value={fmt.text(s.region)} />}
+          {s.destinationname && <MetaItem label="Destination" value={fmt.text(s.destinationname)} />}
+          {s.account && <MetaItem label="Account" value={fmt.text(s.account)} />}
+        </div>
+        {related.filter((o) => o.salesordernumber).length > 1 && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-grid pt-2.5">
+            <span className="text-[11px] uppercase tracking-wide text-ink-3">
+              {related.filter((o) => o.salesordernumber).length} orders on this trip:
+            </span>
+            {related.filter((o) => o.salesordernumber).map((o) => {
+              const active = o.salesordernumber === s.salesordernumber;
+              return (
+                <button
+                  key={o.salesordernumber}
+                  onClick={() => setSo(String(o.salesordernumber))}
+                  className={`rounded-md border px-2.5 py-1 text-xs ${
+                    active ? "border-s1 font-semibold" : "border-edge text-ink-2 hover:text-ink"
+                  }`}
+                  title={`${o.product ?? ""} · batch ${o.batchnumber ?? "—"} · ${o.currentmilestone ?? ""}`}
+                >
+                  {o.salesordernumber}
+                  {o.issue_count > 0 && (
+                    <span className="ml-1" style={{ color: SEV_COLOR.warning }}>◆{o.issue_count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* ---- shipment KPI strip --------------------------------------------- */}
@@ -77,79 +122,24 @@ export default function ShipmentDetailPage() {
       {/* ---- milestone progress stepper ------------------------------------- */}
       {miles.data && <MilestoneStepper data={miles.data} />}
 
-      {/* ---- journey strip --------------------------------------------------- */}
-      <div className="rounded-lg border border-edge bg-surface-1 px-4 py-3">
-        <div className="grid gap-3 text-sm md:grid-cols-[1.4fr_1fr_1fr_1fr]">
-          <div className="flex flex-col gap-1.5">
-            <span className="flex items-baseline gap-2">
-              <span className="mt-[3px] h-2 w-2 shrink-0 rounded-full" style={{ background: "var(--series-4)" }} />
-              <span>
-                <span className="text-[11px] uppercase tracking-wide text-ink-3">Origin&nbsp;&nbsp;</span>
-                {fmt.text(s.origin)}
-              </span>
-            </span>
-            <span className="ml-[3px] h-3 w-px bg-baseline" />
-            <span className="flex items-baseline gap-2">
-              <span className="mt-[3px] h-2 w-2 shrink-0 rounded-full" style={{ background: "var(--series-6)" }} />
-              <span>
-                <span className="text-[11px] uppercase tracking-wide text-ink-3">Destination&nbsp;&nbsp;</span>
-                {fmt.text(s.destinationname)}
-                {s.destinationaddress && (
-                  <span className="block text-xs text-ink-3">{s.destinationaddress}</span>
-                )}
-              </span>
-            </span>
-          </div>
-          <Fact label="Carrier / Order type">
-            <span className="flex flex-wrap items-center gap-1.5">
-              {s.carrier ? (
-                <span className="rounded border border-edge px-1.5 py-0.5 text-xs font-medium">{s.carrier}</span>
-              ) : "—"}
-              <span className="text-ink-2">{fmt.text(s.ordertype)}</span>
-            </span>
-          </Fact>
-          <Fact label="Mode of transport">
-            {fmt.text(s.modeoftransportation)}
-            {s.flightnumber && <span className="block text-xs text-ink-3">flight {s.flightnumber}</span>}
-          </Fact>
-          <Fact label="Planned delivery">
-            {fmt.date(s.planneddeliverydate)} {s.planneddeliverytime ?? ""}
-            {Number(s.totallegs) > 1 && (
-              <span className="block text-xs text-ink-3">leg {s.currentleg ?? "?"} of {s.totallegs}</span>
-            )}
-          </Fact>
-        </div>
-      </div>
-
-      {/* ---- multi-SO switcher ----------------------------------------------- */}
-      {related.filter((o) => o.salesordernumber).length > 1 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-ink-3">
-            {related.filter((o) => o.salesordernumber).length} sales orders on this tracking number:
-          </span>
-          {related.filter((o) => o.salesordernumber).map((o) => {
-            const active = o.salesordernumber === s.salesordernumber;
-            return (
-              <button
-                key={o.salesordernumber}
-                onClick={() => setSo(String(o.salesordernumber))}
-                className={`rounded-md border px-2.5 py-1 text-xs ${
-                  active ? "border-s1 font-semibold" : "border-edge text-ink-2 hover:text-ink"
-                }`}
-                title={`${o.product ?? ""} · batch ${o.batchnumber ?? "—"} · ${o.currentmilestone ?? ""}`}
-              >
-                {o.salesordernumber}
-                {o.issue_count > 0 && (
-                  <span className="ml-1" style={{ color: SEV_COLOR.warning }}>◆{o.issue_count}</span>
-                )}
-              </button>
-            );
-          })}
+      {/* ---- decay & dose intelligence --------------------------------------- */}
+      {dose.data && dose.data.has_dose && <DosePanel d={dose.data} />}
+      {dose.data && !dose.data.has_dose && dose.data.reason && (
+        <div className="rounded-lg border border-edge bg-surface-1 px-4 py-2.5 text-xs text-ink-3">
+          <span className="font-medium text-ink-2">Decay &amp; dose intelligence</span> — {String(dose.data.reason)}
+          {dose.data.isotope && (
+            <span className="text-ink-3"> ({String(dose.data.isotope)}, t½ {fmt.num(
+              Math.round(Number(dose.data.half_life_hours) / 24 * 100) / 100)} d)</span>
+          )}
         </div>
       )}
 
-      {/* ---- map (left) + milestones (right) ---------------------------------- */}
-      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_400px]">
+      {/* ---- order details (full width) -------------------------------------- */}
+      <OrderDetails s={s} />
+
+      {/* ---- map + analytics (left) · order details + milestones (right) ------ */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="flex min-w-0 flex-col gap-4">
         <Panel
           title="Route & GPS trail"
           right={
@@ -199,16 +189,15 @@ export default function ShipmentDetailPage() {
             </>
           )}
         </Panel>
+          {pings.data && pings.data.pings.length > 0 && (
+            <Panel title="GPS trip analytics">
+              <GpsAnalytics pings={pings.data} />
+            </Panel>
+          )}
+        </div>
 
         <MilestonePanel miles={miles} so={String(s.salesordernumber ?? "")} />
       </div>
-
-      {/* ---- GPS trip analytics (from the already-fetched pings) --------------- */}
-      {pings.data && pings.data.pings.length > 0 && (
-        <Panel title="GPS trip analytics">
-          <GpsAnalytics pings={pings.data} />
-        </Panel>
-      )}
 
       {/* ---- order lifecycle / data provenance -------------------------------- */}
       <Panel title="Order lifecycle — where each event came from">
@@ -220,18 +209,6 @@ export default function ShipmentDetailPage() {
           <LifecycleTimeline data={lifecycle.data!} />
         )}
       </Panel>
-
-      {/* ---- dose facts (like the original bottom bar) ------------------------- */}
-      <div className="grid grid-cols-2 gap-2.5 rounded-lg border border-edge bg-surface-1 p-3.5 text-sm sm:grid-cols-3 lg:grid-cols-6">
-        <Fact label="Product">{fmt.text(s.product)}</Fact>
-        <Fact label="Batch #">{fmt.text(s.batchnumber)}</Fact>
-        <Fact label="Vial ID">{fmt.text(s.vialid)}</Fact>
-        <Fact label="Planned injection">
-          {fmt.date(s.injectiondate)} {s.injectiontime ?? ""}
-        </Fact>
-        <Fact label="Sales order #">{fmt.text(s.salesordernumber)}</Fact>
-        <Fact label="Dose status">{fmt.text(s.dosestatus)}</Fact>
-      </div>
 
       {/* ---- RCA -------------------------------------------------------------- */}
       {rca && (
@@ -313,6 +290,281 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
       <div className="text-[11px] uppercase tracking-wide text-ink-3">{label}</div>
       <div className="truncate" title={typeof children === "string" ? children : undefined}>
         {children}
+      </div>
+    </div>
+  );
+}
+
+/* compact "label value" pair for the header meta line */
+function MetaItem({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex items-baseline gap-1">
+      <span className="text-ink-3">{label}</span>
+      <span className="font-medium text-ink-2">{value}</span>
+    </span>
+  );
+}
+
+/* consolidated order-details card (full width): route on the left, the order /
+   dose spec grid on the right — replaces the old journey strip + dose-facts bar. */
+function OrderDetails({ s }: { s: Dict }) {
+  return (
+    <Panel title="Order details">
+      <div className="grid gap-x-6 gap-y-4 md:grid-cols-[minmax(220px,1.1fr)_2.9fr]">
+        {/* route */}
+        <div className="flex flex-col gap-1.5 text-sm md:border-r md:border-grid md:pr-6">
+          <span className="flex items-baseline gap-2">
+            <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full" style={{ background: "var(--series-4)" }} />
+            <span className="min-w-0">
+              <span className="block text-[11px] uppercase tracking-wide text-ink-3">Origin</span>
+              {fmt.text(s.origin)}
+            </span>
+          </span>
+          <span className="ml-[3px] h-4 w-px bg-baseline" />
+          <span className="flex items-baseline gap-2">
+            <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full" style={{ background: "var(--series-6)" }} />
+            <span className="min-w-0">
+              <span className="block text-[11px] uppercase tracking-wide text-ink-3">Destination</span>
+              {fmt.text(s.destinationname)}
+              {s.destinationaddress && (
+                <span className="block text-xs text-ink-3">{s.destinationaddress}</span>
+              )}
+            </span>
+          </span>
+        </div>
+        {/* spec grid */}
+        <div className="grid grid-cols-2 gap-x-5 gap-y-3.5 text-sm sm:grid-cols-3 lg:grid-cols-4">
+          <Fact label="Carrier">
+            {s.carrier
+              ? <span className="rounded border border-edge px-1.5 py-0.5 text-xs font-medium">{s.carrier}</span>
+              : "—"}
+          </Fact>
+          <Fact label="Order type">{fmt.text(s.ordertype)}</Fact>
+          <Fact label="Mode">
+            {fmt.text(s.modeoftransportation)}
+            {s.flightnumber && <span className="block text-xs text-ink-3">flight {s.flightnumber}</span>}
+          </Fact>
+          <Fact label="Planned delivery">
+            {fmt.date(s.planneddeliverydate)} {s.planneddeliverytime ?? ""}
+            {Number(s.totallegs) > 1 && (
+              <span className="block text-xs text-ink-3">leg {s.currentleg ?? "?"} of {s.totallegs}</span>
+            )}
+          </Fact>
+          <Fact label="Product">{fmt.text(s.product)}</Fact>
+          <Fact label="Batch #">{fmt.text(s.batchnumber)}</Fact>
+          <Fact label="Vial ID">{fmt.text(s.vialid)}</Fact>
+          <Fact label="Planned injection">{fmt.date(s.injectiondate)} {s.injectiontime ?? ""}</Fact>
+          <Fact label="Dose status">{fmt.text(s.dosestatus)}</Fact>
+          <Fact label="Carrier tracking">{fmt.text(s.carriertrackingnumber)}</Fact>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+/* =========================================================================== */
+/* Decay & dose intelligence — radioactive-decay model of the delivered dose.
+   All physics is deterministic (A(t) = A0·2^(−(t−t0)/t½)); the inputs are the
+   batch activity columns. No data or schema change. */
+
+const VERDICT_TONE: Record<string, string> = {
+  underdosed: "critical",
+  will_underdose: "serious",
+  pre_window: "info",
+  in_window: "good",
+};
+
+function DosePanel({ d }: { d: Dict }) {
+  const tone = VERDICT_TONE[d.verdict] ?? "info";
+  const color = SEV_COLOR[tone];
+  const nowPct = Number(d.activity_now_pct);
+  const etaPct = d.activity_at_eta_pct == null ? null : Number(d.activity_at_eta_pct);
+  const marginH = Number(d.decay_margin_hours);
+  const marginColor = marginH < 0 ? SEV_COLOR.critical : marginH < 12 ? SEV_COLOR.warning : undefined;
+
+  return (
+    <Panel
+      title="Decay & dose intelligence"
+      right={
+        <span className="flex items-center gap-2 text-xs text-ink-3">
+          <span className="rounded border border-edge px-1.5 py-0.5 font-medium">{d.isotope}</span>
+          t½ {fmt.num(Math.round(Number(d.half_life_hours) / 24 * 100) / 100)} d
+        </span>
+      }
+    >
+      <div className="grid items-center gap-5 lg:grid-cols-[210px_minmax(0,1fr)]">
+        <ActivityGauge d={d} color={color} />
+        <div className="flex min-w-0 flex-col gap-3">
+          <div className="rounded-md px-3 py-2 text-sm font-medium"
+               style={{ background: `color-mix(in srgb, ${color} 14%, transparent)`, color: "var(--text-primary)" }}>
+            <span style={{ color }}>{SEV_ICON[tone]}</span> {d.verdict_label}
+          </div>
+          <DecayCurve d={d} color={color} />
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2.5 border-t border-grid pt-3 text-sm sm:grid-cols-3 lg:grid-cols-6">
+        <Fact label="Prescribed">
+          {fmt.num(d.prescribed_gbq)} GBq
+          <span className="block text-xs text-ink-3">{fmt.num(d.prescribed_mci)} mCi</span>
+        </Fact>
+        <Fact label="Activity now">
+          <span style={{ color }}>{fmt.num(nowPct)}%</span>
+          <span className="block text-xs text-ink-3">{fmt.num(d.activity_now_mbq)} MBq</span>
+        </Fact>
+        <Fact label="Activity at ETA">
+          {etaPct == null ? "—" : <span>{fmt.num(etaPct)}%</span>}
+          <span className="block text-xs text-ink-3">{d.eta ? fmt.dt(d.eta) : "no ETA"}</span>
+        </Fact>
+        <Fact label="Usable window closes">
+          {fmt.dt(d.usable_until)}
+          <span className="block text-xs text-ink-3" style={marginColor ? { color: marginColor } : undefined}>
+            {marginH < 0 ? `${fmt.num(Math.abs(marginH))} h ago` : `in ${fmt.num(marginH)} h`}
+          </span>
+        </Fact>
+        <Fact label="Calibrated for">
+          {fmt.dt(d.calibration_time)}
+          <span className="block text-xs text-ink-3">injection time</span>
+        </Fact>
+        <Fact label="Vial expiry">
+          {d.vial_expiry ? fmt.dt(d.vial_expiry) : "—"}
+          <span className="block text-xs text-ink-3">
+            batch {fmt.text(d.batch_no)}{d.volume_ml ? ` · ${fmt.num(d.volume_ml)} mL` : ""}
+          </span>
+        </Fact>
+      </div>
+
+      <p className="mt-2 text-[11px] leading-relaxed text-ink-3">
+        Vial is calibrated to the prescribed activity at the scheduled injection time; activity then follows
+        A(t) = A₀·2^(−(t−t₀)/t½). Usable band is ±{Math.round(Number(d.tolerance) * 100)}% of prescribed —
+        below it the dose is likely wasted. Deterministic decay physics over existing batch activity columns.
+      </p>
+    </Panel>
+  );
+}
+
+/* radial activity gauge: current activity as % of prescribed, with the usable
+   90–110% target zone marked by ticks. Colour follows the verdict. */
+function ActivityGauge({ d, color }: { d: Dict; color: string }) {
+  const pct = Number(d.activity_now_pct);
+  const tolPct = Number(d.tolerance) * 100;
+  const lowPct = 100 - tolPct, highPct = 100 + tolPct;
+  const maxPct = Math.max(130, Math.ceil((pct + 8) / 10) * 10);
+  const SIZE = 210, cx = SIZE / 2, cy = SIZE / 2, r = 84, sw = 16;
+  const START = 135, SWEEP = 270;
+  const frac = (p: number) => Math.max(0, Math.min(1, p / maxPct));
+  const ang = (p: number) => (START + frac(p) * SWEEP) * Math.PI / 180;
+  const arc = (p0: number, p1: number) => {
+    const a0 = ang(p0), a1 = ang(p1);
+    const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    const large = (frac(p1) - frac(p0)) * SWEEP > 180 ? 1 : 0;
+    return `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+  };
+  const tick = (p: number) => {
+    const a = ang(p), ri = r - sw / 2 - 2, ro = r + sw / 2 + 2;
+    return { x1: cx + ri * Math.cos(a), y1: cy + ri * Math.sin(a), x2: cx + ro * Math.cos(a), y2: cy + ro * Math.sin(a) };
+  };
+  const na = ang(pct), nx = cx + r * Math.cos(na), ny = cy + r * Math.sin(na);
+  const lo = tick(lowPct), hi = tick(highPct);
+
+  return (
+    <div className="relative mx-auto" style={{ width: SIZE, height: SIZE }}>
+      <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
+        <path d={arc(0, maxPct)} fill="none" stroke="var(--grid)" strokeOpacity={0.55} strokeWidth={sw} strokeLinecap="round" />
+        <path d={arc(lowPct, highPct)} fill="none" stroke={SEV_COLOR.good} strokeOpacity={0.28} strokeWidth={sw} />
+        <path d={arc(0, pct)} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" />
+        <line x1={lo.x1} y1={lo.y1} x2={lo.x2} y2={lo.y2} stroke={SEV_COLOR.good} strokeWidth={2.5} strokeLinecap="round" />
+        <line x1={hi.x1} y1={hi.y1} x2={hi.x2} y2={hi.y2} stroke={SEV_COLOR.good} strokeWidth={2.5} strokeLinecap="round" />
+        <circle cx={nx} cy={ny} r={6} fill="var(--surface-1)" stroke={color} strokeWidth={3} />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <span className="tnum text-[34px] font-semibold leading-none" style={{ color }}>{fmt.num(pct)}%</span>
+        <span className="mt-1 text-[11px] text-ink-3">of prescribed</span>
+        <span className="tnum mt-1.5 text-sm text-ink-2">{fmt.num(d.activity_now_mbq)} MBq</span>
+        <span className="mt-0.5 text-[10px] text-ink-3">
+          usable {fmt.num(Math.round(lowPct))}–{fmt.num(Math.round(highPct))}%
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* decay curve over time with the usable band, prescribed reference, and the
+   injection / now / ETA / window-close markers laid on the same axis. */
+function DecayCurve({ d, color }: { d: Dict; color: string }) {
+  const pts: { t: number; mbq: number }[] = (d.curve ?? [])
+    .map((p: Dict) => ({ t: parseTs(p.t)?.getTime() ?? NaN, mbq: Number(p.mbq) }))
+    .filter((p: { t: number }) => !isNaN(p.t));
+  if (pts.length < 2) return null;
+
+  const W = 660, H = 200, padL = 6, padR = 6, padT = 14, padB = 10;
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+  const a0 = Number(d.prescribed_mbq);
+  const yMax = Math.max(a0 * (1 + Number(d.tolerance)) * 1.06, ...pts.map((p) => p.mbq));
+  const x = (t: number) => padL + ((t - t0) / (t1 - t0 || 1)) * (W - padL - padR);
+  const y = (v: number) => padT + (1 - v / yMax) * (H - padT - padB);
+  const cx = (t?: number | null) =>
+    t == null ? null : Math.max(padL, Math.min(W - padR, x(t)));
+
+  const line = pts.map((p, i) => `${i ? "L" : "M"} ${x(p.t).toFixed(1)} ${y(p.mbq).toFixed(1)}`).join(" ");
+  const area = `${line} L ${x(t1).toFixed(1)} ${y(0).toFixed(1)} L ${x(t0).toFixed(1)} ${y(0).toFixed(1)} Z`;
+
+  const low = Number(d.usable_low_mbq), high = Number(d.usable_high_mbq);
+  const cal = parseTs(d.calibration_time)?.getTime() ?? null;
+  const now = parseTs(d.now)?.getTime() ?? null;
+  const eta = parseTs(d.eta)?.getTime() ?? null;
+  const until = parseTs(d.usable_until)?.getTime() ?? null;
+
+  // "now" uses a neutral ink (not the verdict color): the curve line + area +
+  // gauge already carry the verdict hue, and a verdict-coloured "now" collides
+  // with the blue ETA marker in the common pre_window (info) state.
+  const markers = [
+    { t: cal, label: "injection", c: "var(--series-5)", dash: false },
+    { t: until, label: "usable ends", c: SEV_COLOR.warning, dash: true },
+    { t: eta, label: "ETA", c: "var(--series-1)", dash: false },
+    { t: now, label: "now", c: "var(--text-primary)", dash: false },
+  ].filter((m) => m.t != null);
+
+  return (
+    <div className="min-w-0">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 230 }}>
+        {/* usable activity band */}
+        <rect x={padL} y={y(high)} width={W - padL - padR} height={Math.max(0, y(low) - y(high))}
+              fill={SEV_COLOR.good} opacity={0.13} />
+        <line x1={padL} x2={W - padR} y1={y(a0)} y2={y(a0)} stroke="var(--text-muted)"
+              strokeOpacity={0.6} strokeDasharray="3 3" strokeWidth={1} />
+        <path d={area} fill={color} opacity={0.08} />
+        <path d={line} fill="none" stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+        {markers.map((m) => {
+          const mx = cx(m.t)!;
+          return (
+            <line key={m.label} x1={mx} x2={mx} y1={padT} y2={H - padB} stroke={m.c}
+                  strokeWidth={m.label === "now" ? 2 : 1.25}
+                  strokeDasharray={m.dash ? "4 3" : undefined} strokeOpacity={0.9} />
+          );
+        })}
+        {now != null && (
+          <circle cx={cx(now)!} cy={y(Number(d.activity_now_mbq))} r={4.5}
+                  fill="var(--text-primary)" stroke="var(--surface-1)" strokeWidth={1.5} />
+        )}
+        {eta != null && d.activity_at_eta_mbq != null && (
+          <circle cx={cx(eta)!} cy={y(Number(d.activity_at_eta_mbq))} r={4.5}
+                  fill="var(--series-1)" stroke="var(--surface-1)" strokeWidth={1.5} />
+        )}
+      </svg>
+      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-3">
+        {markers.map((m) => (
+          <span key={m.label} className="inline-flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: m.c }} />{m.label}
+          </span>
+        ))}
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-3 rounded-sm" style={{ background: SEV_COLOR.good, opacity: 0.5 }} />usable band
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block h-0 w-3 border-t border-dashed" style={{ borderColor: "var(--text-muted)" }} />prescribed
+        </span>
       </div>
     </div>
   );
