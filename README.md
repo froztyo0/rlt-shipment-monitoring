@@ -1,14 +1,33 @@
-# RLT Shipment Monitoring — Ops Observability Dashboard
+# RLT Shipment Monitoring — Ops Observability & Decision-Intelligence Platform
 
-Read-only observability dashboard over the `etl` schema (AWS RDS Postgres).
-It doesn't just *serve* data — it **flags problems on its own**: blank fields
-are traced back to the source system that failed to deliver them, carrier
-milestone sequences are replayed against the expected maps, GPS trails are
-scanned for ghost pings, and overdue injections get an automatic root-cause
-verdict.
+Read-only platform over the `etl` schema (AWS RDS Postgres) for **radioligand
+therapy** shipments — Pluvicto & Lutathera (Lu-177). It doesn't just *serve*
+data. First, it **flags problems on its own**: blank fields are traced back to
+the source system that failed to deliver them, carrier milestone sequences are
+replayed against the expected maps, GPS trails are scanned for ghost pings, and
+overdue injections get an automatic root-cause verdict. Second, a
+**decision-intelligence layer** 🆕 models the *physics and the network* of the
+dose flow — radioactive decay of the delivered dose, patient blast-radius per
+production lot, bias-corrected carrier ETAs, network single-points-of-failure,
+and an independent GPS ETA with stall / wrong-way detection.
+
+Why this is hard: Lu-177 has a **6.647-day half-life** and the vial is calibrated
+to a **scheduled injection time** — every hour of delay decays the dose, and a
+dose delivered too late is clinically unusable and can't be re-made in time.
 
 **FastAPI** backend · **React + Vite + Tailwind** frontend · zero writes
 (every DB session is opened with `default_transaction_read_only=on`).
+
+> 📐 **Full architecture, data model, module-by-module breakdown, and the
+> innovative-features deep-dive:** see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+```mermaid
+flowchart LR
+  UI["React SPA<br/>Dashboard · Analytics · Ops · Reports · Shipment Detail<br/>🆕 Batch Cohorts · ETA Calibration · Chokepoints · Live ETA"]
+  API["FastAPI backend (asyncpg, read-only)<br/>routers → analysis/physics → support"]
+  DB["AWS RDS Postgres — etl schema<br/>(SELECT only)"]
+  UI -->|"/api/*"| API -->|"read-only SELECT"| DB
+```
 
 ---
 
@@ -234,6 +253,11 @@ fix inside geofence; `dist_threshold` or `DEFAULT_GEOFENCE_KM`) →
 | `GET /api/ops/sequence-violations` | recent orders replayed against maps |
 | `GET /api/ops/stale-injections` | overdue shipments with RCA verdicts |
 | `GET /api/ops/rejects?source=rome\|carrier\|sensitech` | reject feeds, grouped by error |
+| 🆕 `GET /api/shipments/{tn}/dose` | radioactive-decay / delivered-activity model for the dose |
+| 🆕 `GET /api/cohorts` | production lots ranked by patient blast-radius |
+| 🆕 `GET /api/eta-calibration` | carrier bias leaderboard + bias-corrected live forecast |
+| 🆕 `GET /api/chokepoints` | network single-points-of-failure + per-layer concentration |
+| 🆕 `GET /api/dead-reckoning` | independent GPS-derived ETA + stall / wrong-way detection |
 
 `{tn}` accepts the Sensitech tracking number **or** a sales order number.
 One tracking number can carry several sales orders — the detail page shows a
