@@ -7,6 +7,7 @@ import ReportsPage from "./pages/ReportsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import BatchCohortsPage from "./pages/BatchCohortsPage";
 import ETACalibrationPage from "./pages/ETACalibrationPage";
+import ChokepointsPage from "./pages/ChokepointsPage";
 
 // key by tracking number so per-shipment state (e.g. the selected sales
 // order) resets when navigating from one shipment straight to another
@@ -65,6 +66,9 @@ export default function App() {
             <NavLink to="/eta-calibration" className={navCls}>
               ETA Calibration
             </NavLink>
+            <NavLink to="/chokepoints" className={navCls}>
+              Chokepoints
+            </NavLink>
             <NavLink to="/reports" className={navCls}>
               Reports
             </NavLink>
@@ -88,6 +92,7 @@ export default function App() {
           <Route path="/ops" element={<OpsPage />} />
           <Route path="/cohorts" element={<BatchCohortsPage />} />
           <Route path="/eta-calibration" element={<ETACalibrationPage />} />
+          <Route path="/chokepoints" element={<ChokepointsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/shipment/:tracking" element={<ShipmentDetailRoute />} />
         </Routes>

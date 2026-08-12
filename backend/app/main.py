@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import airports
 from .db import close_pool, fetch_val
 from .routers import (
-    analytics, cohorts, eta_calibration, feeds, kpis, ops, reports,
+    analytics, chokepoints, cohorts, eta_calibration, feeds, kpis, ops, reports,
     shipment_detail, shipments,
 )
 
@@ -44,6 +44,7 @@ app.include_router(shipment_detail.router)
 app.include_router(ops.router)
 app.include_router(cohorts.router)
 app.include_router(eta_calibration.router)
+app.include_router(chokepoints.router)
 
 
 @app.get("/api/health")
