@@ -8,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import airports
 from .db import close_pool, fetch_val
 from .routers import (
-    analytics, cohorts, feeds, kpis, ops, reports, shipment_detail, shipments,
+    analytics, cohorts, eta_calibration, feeds, kpis, ops, reports,
+    shipment_detail, shipments,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -42,6 +43,7 @@ app.include_router(shipments.router)
 app.include_router(shipment_detail.router)
 app.include_router(ops.router)
 app.include_router(cohorts.router)
+app.include_router(eta_calibration.router)
 
 
 @app.get("/api/health")
