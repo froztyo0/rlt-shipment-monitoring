@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { api, Dict, fmt } from "../api";
-import { ErrorBox, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
+import { ErrorBox, ExportButton, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
 
 /* Dead-Reckoning ETA & Stall board — an independent, GPS-derived ETA from
    closing speed toward destination, plus stall / wrong-way detection that the
@@ -33,15 +33,7 @@ export default function DeadReckoningPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">Dead-Reckoning ETA &amp; Stall board</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-ink-3">
-          An independent ETA computed straight from the GPS trail — closing speed (how fast distance-to-
-          destination is shrinking) gives remaining distance ÷ speed, owing nothing to the carrier's promise.
-          It also catches doses <em>moving but not toward the patient</em> and ones <em>stalled in place</em>,
-          which the carrier ETA and ghost detection both miss.
-        </p>
-      </div>
+      <h1 className="text-lg font-semibold tracking-tight">Dead-Reckoning ETA &amp; Stall board</h1>
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
         <KpiTile label="GPS-tracked" value={fmt.num(s.tracked)} sub="departed, ≥2 fixes" />
@@ -56,7 +48,13 @@ export default function DeadReckoningPage() {
         <KpiTile label="On track" value={fmt.num(s.on_track)} tone="good" sub="GPS ETA beats deadline" />
       </div>
 
-      <Panel title="In-transit doses — independent GPS forecast (most urgent first)">
+      <Panel
+        title="In-transit doses — independent GPS forecast"
+        right={<ExportButton filename="dead-reckoning" rows={items} columns={[
+          "salesordernumber", "trackingnumber", "carrier", "closing_kmh", "route_pct", "remaining_km",
+          "gps_eta", "injection_deadline", "gps_slack_h", "stall_hours", "verdict",
+        ]} />}
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-[13px]">
             <thead>

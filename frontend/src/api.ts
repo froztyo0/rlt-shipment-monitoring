@@ -79,19 +79,48 @@ export class ApiError extends Error {
   }
 }
 
-// Short-lived client cache: GET responses are memoized by URL for a few
-// seconds so navigating away and back (which unmounts/remounts pages) doesn't
-// refetch everything. It also de-dupes concurrent identical requests. Matches
-// the server-side aggregate TTLs; per-shipment data is fine at this staleness.
-const _apiCache = new Map<string, { t: number; p: Promise<any> }>();
-const API_CACHE_MS = 45_000;
+// Session-persistent client cache: GET responses are memoized by URL so
+// navigating away and back (which unmounts/remounts pages) does NOT re-hit the
+// DB. It also de-dupes concurrent identical requests. TTLs are tiered — stable
+// aggregates (feed health, analytics, KPIs, the intelligence boards) are held
+// for a long time and effectively fetched once per session; the user forces a
+// live refresh with the header Refresh button (refreshAllData). Only volatile,
+// filter-driven data (the shipment list) uses the shorter default.
+export const TTL = {
+  DEFAULT: 5 * 60_000,   // 5 min — general navigation reuse
+  STABLE: 30 * 60_000,   // 30 min — aggregates that rarely need a re-hit
+  FRESH: 20_000,         // near-live, opt-in
+};
 
-/** Drop cached GET responses (call after a mutation, if we ever add one). */
+const _apiCache = new Map<string, { t: number; ttl: number; p: Promise<any> }>();
+
+/** Drop cached GET responses. */
 export function clearApiCache() {
   _apiCache.clear();
 }
 
-export async function api<T = Dict>(path: string, params?: Dict): Promise<T> {
+// Global "refresh everything" signal: bumps a version that every useApi hook
+// watches, so one button clears the cache and re-fetches all mounted views.
+let _cacheVersion = 0;
+const _versionSubs = new Set<() => void>();
+export function refreshAllData() {
+  _apiCache.clear();
+  _cacheVersion++;
+  _versionSubs.forEach((fn) => fn());
+}
+export function getCacheVersion() {
+  return _cacheVersion;
+}
+export function subscribeCacheVersion(cb: () => void): () => void {
+  _versionSubs.add(cb);
+  return () => _versionSubs.delete(cb);
+}
+
+export async function api<T = Dict>(
+  path: string,
+  params?: Dict,
+  opts?: { ttl?: number; force?: boolean }
+): Promise<T> {
   const url = new URL(path, window.location.origin);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -99,10 +128,11 @@ export async function api<T = Dict>(path: string, params?: Dict): Promise<T> {
     }
   }
   const rel = url.toString().replace(window.location.origin, "");
+  const ttl = opts?.ttl ?? TTL.DEFAULT;
 
   const now = Date.now();
   const hit = _apiCache.get(rel);
-  if (hit && now - hit.t < API_CACHE_MS) return hit.p as Promise<T>;
+  if (!opts?.force && hit && now - hit.t < hit.ttl) return hit.p as Promise<T>;
 
   const p = (async () => {
     const res = await fetch(rel);
@@ -119,12 +149,40 @@ export async function api<T = Dict>(path: string, params?: Dict): Promise<T> {
     return res.json();
   })();
 
-  _apiCache.set(rel, { t: now, p });
+  _apiCache.set(rel, { t: now, ttl, p });
   // never cache failures — evict so the next call retries
   p.catch(() => {
     if (_apiCache.get(rel)?.p === p) _apiCache.delete(rel);
   });
   return p;
+}
+
+export type CsvColumn = string | { key: string; label?: string };
+
+/** Client-side CSV export — flatten rows to a downloadable file, no backend. */
+export function exportCsv(filename: string, rows: Dict[], columns?: CsvColumn[]): void {
+  if (!rows || rows.length === 0) return;
+  const cols = (columns ?? Object.keys(rows[0])).map((c) =>
+    typeof c === "string" ? { key: c, label: c } : { key: c.key, label: c.label ?? c.key }
+  );
+  const esc = (v: any): string => {
+    if (v === null || v === undefined) return "";
+    const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv =
+    cols.map((c) => esc(c.label)).join(",") +
+    "\n" +
+    rows.map((r) => cols.map((c) => esc(r[c.key])).join(",")).join("\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename.endsWith(".csv") ? filename : `${filename}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 /** Parse a possibly offset-less DB timestamp as UTC (matches fmt.ago). */

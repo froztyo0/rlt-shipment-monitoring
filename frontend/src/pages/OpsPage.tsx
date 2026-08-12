@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Dict, fmt } from "../api";
+import { api, Dict, fmt, TTL } from "../api";
 import {
   BarList, ErrorBox, KpiTile, Panel, SEV_COLOR, SEV_ICON, SeverityBadge, Spinner, useApi,
 } from "../components/ui";
@@ -17,7 +17,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 export default function OpsPage() {
   const [tab, setTab] = useState<Tab>("injrisk");
-  const kpis = useApi<Dict>(() => api("/api/kpis"), []);
+  const kpis = useApi<Dict>(() => api("/api/kpis", undefined, { ttl: TTL.STABLE }), []);
 
   return (
     <div className="flex flex-col gap-4">

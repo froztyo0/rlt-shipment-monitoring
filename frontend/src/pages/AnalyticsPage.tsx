@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, Dict, fmt } from "../api";
+import { api, Dict, fmt, TTL } from "../api";
 import { ErrorBox, KpiTile, Panel, Spinner, useApi } from "../components/ui";
 import { Datum, Donut, HBarChart, StackedColumns } from "../components/charts";
 
@@ -15,9 +15,9 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function AnalyticsPage() {
   const [win, setWin] = useState(30);
-  const carriers = useApi<Dict>(() => api("/api/analytics/carriers", { window_days: win }), [win]);
-  const overview = useApi<Dict>(() => api("/api/analytics/overview", { window_days: win }), [win]);
-  const dwell = useApi<Dict>(() => api("/api/analytics/dwell", { window_days: win }), [win]);
+  const carriers = useApi<Dict>(() => api("/api/analytics/carriers", { window_days: win }, { ttl: TTL.STABLE }), [win]);
+  const overview = useApi<Dict>(() => api("/api/analytics/overview", { window_days: win }, { ttl: TTL.STABLE }), [win]);
+  const dwell = useApi<Dict>(() => api("/api/analytics/dwell", { window_days: win }, { ttl: TTL.STABLE }), [win]);
 
   const t: Dict = overview.data?.totals ?? {};
   const carrierRows: Dict[] = carriers.data?.carriers ?? [];

@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
-import { api, Dict, fmt } from "../api";
-import { ErrorBox, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
+import { api, Dict, fmt, TTL } from "../api";
+import { ErrorBox, ExportButton, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
+import { Heatmap, HeatCell } from "../components/charts";
 
 /* Carrier ETA Calibration — correct each live ETA by that carrier's own
    historical delivery bias, then re-check the injection deadline. Flips
@@ -21,25 +22,17 @@ const hrs = (h: unknown) => {
 };
 
 export default function ETACalibrationPage() {
-  const data = useApi<Dict>(() => api("/api/eta-calibration"), []);
+  const data = useApi<Dict>(() => api("/api/eta-calibration", undefined, { ttl: TTL.STABLE }), []);
   if (data.loading) return <Spinner label="Learning carrier delivery bias from history…" />;
   if (data.error) return <ErrorBox error={data.error} />;
   const d = data.data!;
   const s = d.summary ?? {};
   const carriers: Dict[] = d.carriers ?? [];
   const live: Dict[] = d.live ?? [];
-  const maxBias = Math.max(24, ...carriers.map((c) => Math.abs(Number(c.p90_bias_h) || 0)));
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">Carrier ETA Calibration</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-ink-3">
-          Each carrier's live ETA is corrected by its own historical delivery bias on that lane. A carrier
-          that's chronically optimistic quietly turns 'on-track' doses into missed injections — this
-          re-forecasts the deadline so those flips surface while there's still time to expedite.
-        </p>
-      </div>
+      <h1 className="text-lg font-semibold tracking-tight">Carrier ETA Calibration</h1>
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
         <KpiTile label="Flipped by calibration" value={fmt.num(s.flipped)}
@@ -54,7 +47,13 @@ export default function ETACalibrationPage() {
           sub="carrier/lane too thin" />
       </div>
 
-      <Panel title="Live doses — bias-corrected forecast (most urgent first)">
+      <Panel
+        title="Live doses — bias-corrected forecast"
+        right={<ExportButton filename="eta-calibration" rows={live} columns={[
+          "salesordernumber", "trackingnumber", "carrier", "mode", "injection_deadline",
+          "carrier_eta", "calibrated_eta", "bias_h", "slack_raw_h", "slack_calibrated_h", "verdict", "flipped",
+        ]} />}
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-[13px]">
             <thead>
@@ -121,57 +120,24 @@ export default function ETACalibrationPage() {
         </div>
       </Panel>
 
-      <Panel title="Carrier delivery bias — learned from delivered history">
-        <p className="mb-2 text-xs text-ink-3">
-          Median delivery error vs the promised ETA (▸ right = runs late / optimistic). Bar shows median;
-          whisker to p90. Carriers below the sample threshold are shown but not applied to live forecasts.
-        </p>
-        <div className="flex flex-col gap-1.5">
-          {carriers.map((c) => (
-            <BiasRow key={`${c.carrier}-${c.mode}`} c={c} maxBias={maxBias} />
-          ))}
-          {carriers.length === 0 && <div className="text-sm text-ink-3">No delivered history in the window.</div>}
-        </div>
+      <Panel title="Carrier delivery bias — median hours late (red) / early (green)">
+        <Heatmap
+          diverging
+          mid={0}
+          rowLabelWidth={110}
+          format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(0)}h`}
+          rows={[...new Set(carriers.map((c) => String(c.carrier)))]}
+          cols={[...new Set(carriers.map((c) => String(c.mode)))]}
+          cells={carriers.map((c): HeatCell => ({
+            row: String(c.carrier),
+            col: String(c.mode),
+            value: Number(c.median_bias_h),
+            title: `${c.carrier} · ${c.mode}: ${Number(c.median_bias_h) > 0 ? "+" : ""}${c.median_bias_h}h bias · ${c.on_time_pct}% on-time · n=${c.n}${c.trusted ? "" : " (thin sample)"}`,
+          }))}
+        />
+        {carriers.length === 0 && <div className="text-sm text-ink-3">No delivered history in the window.</div>}
       </Panel>
     </div>
   );
 }
 
-/* diverging bias bar centered at 0: right (red) = late, left (green) = early */
-function BiasRow({ c, maxBias }: { c: Dict; maxBias: number }) {
-  const median = Number(c.median_bias_h) || 0;
-  const p90 = Number(c.p90_bias_h) || 0;
-  const pct = (h: number) => (Math.max(-maxBias, Math.min(maxBias, h)) / maxBias) * 50; // -50..50 %
-  const late = median > 0;
-  return (
-    <div className="grid items-center gap-2" style={{ gridTemplateColumns: "170px 1fr 210px" }}>
-      <div className="min-w-0">
-        <span className="text-[13px] font-medium">{fmt.text(c.carrier)}</span>
-        <span className="ml-1 text-[11px] text-ink-3">{fmt.text(c.mode)}</span>
-        {!c.trusted && <span className="ml-1 text-[10px] text-ink-3">(n={c.n})</span>}
-      </div>
-      <div className="relative h-5">
-        <span className="absolute inset-y-0 left-1/2 w-px bg-baseline" />
-        {/* p90 whisker */}
-        <span className="absolute top-1/2 h-[2px] -translate-y-1/2"
-          style={{ left: `${50 + Math.min(0, pct(p90))}%`, width: `${Math.abs(pct(p90) - pct(0))}%`, background: "var(--grid)" }} />
-        {/* median bar from center */}
-        <span className="absolute top-1/2 h-3 -translate-y-1/2 rounded-sm"
-          style={{
-            left: `${50 + Math.min(0, pct(median))}%`,
-            width: `${Math.max(1, Math.abs(pct(median)))}%`,
-            background: late ? SEV_COLOR.critical : "var(--status-good)",
-          }} />
-      </div>
-      <div className="flex items-center justify-end gap-2 text-[11px] text-ink-3">
-        <span className="tnum font-medium" style={{ color: late ? SEV_COLOR.critical : "var(--status-good)" }}>
-          {median > 0 ? "+" : ""}{median.toFixed(1)}h
-        </span>
-        <span>·</span>
-        <span className="tnum">{fmt.num(c.on_time_pct)}% on-time</span>
-        <span>·</span>
-        <span className="tnum">n={c.n}</span>
-      </div>
-    </div>
-  );
-}

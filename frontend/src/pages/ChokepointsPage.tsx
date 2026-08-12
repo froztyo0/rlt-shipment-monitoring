@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Dict, fmt } from "../api";
-import { ErrorBox, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
+import { api, Dict, fmt, TTL } from "../api";
+import { ErrorBox, ExportButton, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
 
 /* Chokepoint / SPOF board — the dose flow as a origin→carrier→hub→region graph,
    with every node ranked by how many un-injected doses it would strand if it
@@ -28,7 +28,7 @@ function concLabel(hhi: number): { text: string; tone: string } {
 }
 
 export default function ChokepointsPage() {
-  const data = useApi<Dict>(() => api("/api/chokepoints"), []);
+  const data = useApi<Dict>(() => api("/api/chokepoints", undefined, { ttl: TTL.STABLE }), []);
   if (data.loading) return <Spinner label="Mapping the dose-flow network…" />;
   if (data.error) return <ErrorBox error={data.error} />;
   const d = data.data!;
@@ -38,14 +38,7 @@ export default function ChokepointsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">Chokepoints &amp; single points of failure</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-ink-3">
-          The live dose flow modelled as a network — dispatch origin → carrier → airport hub → destination
-          region. Each node is ranked by its <em>blast-radius</em>: the un-injected doses that would miss if
-          that node went dark. Concentration (Herfindahl index) per layer flags where there's no fallback.
-        </p>
-      </div>
+      <h1 className="text-lg font-semibold tracking-tight">Chokepoints &amp; single points of failure</h1>
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         <KpiTile label="Active doses in window" value={fmt.num(s.active_doses)} sub="un-injected, scheduled" />
@@ -57,7 +50,12 @@ export default function ChokepointsPage() {
           sub="least fallback" />
       </div>
 
-      <Panel title="Top chokepoints — the single nodes that strand the most doses">
+      <Panel
+        title="Top chokepoints — nodes that strand the most doses"
+        right={<ExportButton filename="chokepoints" rows={top} columns={[
+          "layer", "name", "doses", "active", "blast_radius", "overdue", "imminent", "upcoming",
+        ]} />}
+      >
         <div className="flex flex-col gap-2">
           {top.map((n) => <NodeRow key={`${n.layer}-${n.name}`} n={n} expandable />)}
           {top.length === 0 && (

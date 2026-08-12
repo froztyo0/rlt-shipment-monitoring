@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Dict, fmt } from "../api";
-import { ErrorBox, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
+import { api, Dict, fmt, TTL } from "../api";
+import { ErrorBox, ExportButton, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
 
 /* Batch Cohort Blast-Radius — production lots ranked by how many un-injected
    patients one bad lot would strand at once. RLT's true failure unit. */
@@ -25,7 +25,7 @@ function riskSev(risk: unknown): string {
 }
 
 export default function BatchCohortsPage() {
-  const data = useApi<Dict>(() => api("/api/cohorts"), []);
+  const data = useApi<Dict>(() => api("/api/cohorts", undefined, { ttl: TTL.STABLE }), []);
   if (data.loading) return <Spinner label="Grouping doses by production lot…" />;
   if (data.error) return <ErrorBox error={data.error} />;
   const d = data.data!;
@@ -35,14 +35,7 @@ export default function BatchCohortsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">Batch Cohort Blast-Radius</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-ink-3">
-          One Lu-177 lot is split into per-patient vials from a single decay-synchronised run — so a
-          batch hold or shared-carrier delay strands <em>every</em> un-injected patient in that lot at
-          once. Lots are ranked by that blast-radius: the undelivered {patientBasis ? "patients" : "doses"} depending on them.
-        </p>
-      </div>
+      <h1 className="text-lg font-semibold tracking-tight">Batch Cohort Blast-Radius</h1>
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
         <KpiTile label="Lots at risk" value={fmt.num(s.cohorts_at_risk)}
@@ -59,7 +52,13 @@ export default function BatchCohortsPage() {
           sub="shared production runs" />
       </div>
 
-      <Panel title={`Production lots · ${cohorts.length} in the injection window (worst first)`}>
+      <Panel
+        title={`Production lots · ${cohorts.length} in window`}
+        right={<ExportButton filename="batch-cohorts" rows={cohorts} columns={[
+          "batch_no", "product", "doses", "delivered", "active", "overdue", "imminent",
+          "upcoming", "blast_radius", "risk_max", "batch_status", "earliest_injection", "latest_injection",
+        ]} />}
+      >
         <div className="flex flex-col gap-2.5">
           {cohorts.map((c) => <CohortCard key={c.batch_no} c={c} patientBasis={patientBasis} />)}
           {cohorts.length === 0 && (

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Route, Routes, useParams } from "react-router-dom";
+import { refreshAllData } from "./api";
 import DashboardPage from "./pages/DashboardPage";
 import ShipmentDetailPage from "./pages/ShipmentDetailPage";
 import OpsPage from "./pages/OpsPage";
@@ -78,7 +79,14 @@ export default function App() {
             </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-3">
-            <span className="text-xs text-ink-3">read-only · etl schema</span>
+            <span className="hidden text-xs text-ink-3 sm:inline">read-only · etl schema</span>
+            <button
+              onClick={() => refreshAllData()}
+              title="Refresh data (re-query the DB for all open views)"
+              className="rounded-md border border-edge px-2.5 py-1 text-xs text-ink-2 hover:text-ink"
+            >
+              ↻ Refresh
+            </button>
             <button
               onClick={() => setTheme(next)}
               title={`Theme: ${theme} (click for ${next})`}

@@ -1,5 +1,27 @@
 import { ReactNode, useEffect, useState } from "react";
-import { Issue } from "../api";
+import { CsvColumn, Dict, Issue, exportCsv, getCacheVersion, subscribeCacheVersion } from "../api";
+
+/* ---- CSV export ---------------------------------------------------------- */
+export function ExportButton({
+  filename, rows, columns, label = "Export CSV",
+}: {
+  filename: string;
+  rows: Dict[];
+  columns?: CsvColumn[];
+  label?: string;
+}) {
+  const n = rows?.length ?? 0;
+  return (
+    <button
+      onClick={() => exportCsv(filename, rows, columns)}
+      disabled={!n}
+      title={n ? `Download ${n} rows as CSV` : "Nothing to export"}
+      className="rounded-md border border-edge px-2 py-0.5 text-[11px] text-ink-2 hover:text-ink disabled:opacity-40"
+    >
+      ↓ {label}
+    </button>
+  );
+}
 
 /* ---- severity ----------------------------------------------------------- */
 export const SEV_COLOR: Record<string, string> = {
@@ -159,6 +181,10 @@ export function useApi<T>(
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(true);
+  // re-run when the global Refresh button fires (cache is cleared + version
+  // bumped) so a manual refresh re-fetches every mounted view at once.
+  const [version, setVersion] = useState(getCacheVersion());
+  useEffect(() => subscribeCacheVersion(() => setVersion(getCacheVersion())), []);
   useEffect(() => {
     let alive = true;
     setBusy(true);
@@ -172,6 +198,6 @@ export function useApi<T>(
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [...deps, version]);
   return { data, error, loading: busy && data === null, refreshing: busy && data !== null };
 }

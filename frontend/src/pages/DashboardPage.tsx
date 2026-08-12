@@ -1,8 +1,8 @@
 import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, fmt, Dict, ListResponse } from "../api";
+import { api, fmt, Dict, ListResponse, TTL } from "../api";
 import {
-  BarList, ErrorBox, KpiTile, Panel, SEV_COLOR, SEV_ICON, SeverityBadge, Spinner, useApi,
+  BarList, ErrorBox, ExportButton, KpiTile, Panel, SEV_COLOR, SEV_ICON, SeverityBadge, Spinner, useApi,
 } from "../components/ui";
 
 interface Filters {
@@ -40,11 +40,13 @@ export default function DashboardPage() {
   const [f, setF] = useState<Filters>(defaultFilters);
   const [searchDraft, setSearchDraft] = useState("");
 
-  const kpis = useApi<Dict>(() => api("/api/kpis"), []);
-  const inj = useApi<Dict>(() => api("/api/kpis/injections"), []);
-  const feeds = useApi<Dict>(() => api("/api/feeds/health"), []);
-  const alerts = useApi<Dict>(() => api("/api/kpis/alerts"), []);
-  const meta = useApi<Dict>(() => api("/api/shipments/filters"), []);
+  // aggregates that change slowly → held for the session (30 min); the header
+  // ↻ Refresh forces a live re-query. Only the filter-driven list stays short.
+  const kpis = useApi<Dict>(() => api("/api/kpis", undefined, { ttl: TTL.STABLE }), []);
+  const inj = useApi<Dict>(() => api("/api/kpis/injections", undefined, { ttl: TTL.STABLE }), []);
+  const feeds = useApi<Dict>(() => api("/api/feeds/health", undefined, { ttl: TTL.STABLE }), []);
+  const alerts = useApi<Dict>(() => api("/api/kpis/alerts", undefined, { ttl: TTL.STABLE }), []);
+  const meta = useApi<Dict>(() => api("/api/shipments/filters", undefined, { ttl: TTL.STABLE }), []);
   const list = useApi<ListResponse>(
     () => api("/api/shipments", { ...f, only_issues: f.only_issues ? "true" : "", page_size: 50 }),
     [JSON.stringify(f)],
@@ -157,11 +159,18 @@ export default function DashboardPage() {
       <Panel
         title={`Shipments ${list.data ? `· ${list.data.total.toLocaleString()} match` : ""}`}
         right={
-          f.flag || f.status || f.only_issues || f.search ? (
-            <button className="text-xs text-s1 hover:underline" onClick={() => { setSearchDraft(""); setF(defaultFilters()); }}>
-              clear filters
-            </button>
-          ) : undefined
+          <span className="flex items-center gap-2">
+            {(f.flag || f.status || f.only_issues || f.search) && (
+              <button className="text-xs text-s1 hover:underline" onClick={() => { setSearchDraft(""); setF(defaultFilters()); }}>
+                clear filters
+              </button>
+            )}
+            <ExportButton filename="shipments" rows={list.data?.items ?? []} columns={[
+              "trackingnumber", "salesordernumber", "product", "carrier", "modeoftransportation",
+              "region", "destinationname", "injectiondate", "currentmilestone", "dosestatus",
+              "risk", "riskbucket", "etadeliverytime", "planneddeliverydate", "batchnumber", "issue_count",
+            ]} />
+          </span>
         }
       >
         <div className="mb-3 flex flex-wrap items-center gap-2">
