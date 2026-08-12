@@ -179,6 +179,89 @@ async def _overview(window: int):
 
 
 # ---------------------------------------------------------------------------
+# matrices — carrier×region reliability, region×status, injection calendar
+# ---------------------------------------------------------------------------
+@router.get("/matrix")
+async def matrix(window_days: int = Query(default=30, ge=1, le=180)):
+    return await cached(f"an:matrix:{window_days}", TTL, lambda: _matrix(window_days))
+
+
+async def _matrix(window: int):
+    scope = _scope(window)
+
+    cr = await fetch_all(f"""
+        SELECT COALESCE(NULLIF(TRIM(s.carrier::text), ''), '(unassigned)') AS carrier,
+               COALESCE(NULLIF(TRIM(s.region::text), ''), '(none)') AS region,
+               COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE {DELIVERED}) AS delivered,
+               COUNT(*) FILTER (WHERE {ON_TIME}) AS on_time,
+               COUNT(*) FILTER (WHERE {LATE}) AS late
+        FROM etl.shipment s WHERE {scope}
+        GROUP BY 1, 2
+    """)
+    carrier_tot: dict[str, int] = {}
+    region_tot: dict[str, int] = {}
+    cr_cells = []
+    for r in cr:
+        c, reg = r["carrier"], r["region"]
+        ot, la = int(r["on_time"] or 0), int(r["late"] or 0)
+        carrier_tot[c] = carrier_tot.get(c, 0) + int(r["total"] or 0)
+        region_tot[reg] = region_tot.get(reg, 0) + int(r["total"] or 0)
+        cr_cells.append({
+            "carrier": c, "region": reg,
+            "on_time_pct": _pct(ot, ot + la), "delivered": int(r["delivered"] or 0),
+            "total": int(r["total"] or 0),
+        })
+    carriers = [c for c, _ in sorted(carrier_tot.items(), key=lambda kv: -kv[1])][:12]
+    regions = [r for r, _ in sorted(region_tot.items(), key=lambda kv: -kv[1])][:12]
+    cr_set = set(carriers)
+    rg_set = set(regions)
+    cr_cells = [c for c in cr_cells if c["carrier"] in cr_set and c["region"] in rg_set]
+
+    rs = await fetch_all(f"""
+        SELECT COALESCE(NULLIF(TRIM(s.region::text), ''), '(none)') AS region,
+               COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE {DELIVERED}) AS delivered,
+               COUNT(*) FILTER (WHERE {IN_TRANSIT}) AS in_transit,
+               COUNT(*) FILTER (WHERE {ARRIVED_X}) AS arrived,
+               COUNT(*) FILTER (WHERE {NOT_STARTED}) AS not_started,
+               COUNT(*) FILTER (WHERE {q.CANCELLED_SQL}) AS cancelled
+        FROM etl.shipment s WHERE {scope}
+        GROUP BY 1 ORDER BY total DESC LIMIT 12
+    """)
+    region_status = [{
+        "region": r["region"], "total": int(r["total"] or 0),
+        "delivered": int(r["delivered"] or 0), "in_transit": int(r["in_transit"] or 0),
+        "arrived": int(r["arrived"] or 0), "not_started": int(r["not_started"] or 0),
+        "cancelled": int(r["cancelled"] or 0),
+    } for r in rs]
+
+    # calendar spans the window back + 30 days forward, so upcoming crunch days show
+    cal = await fetch_all(f"""
+        SELECT s.injectiondate::date AS day, COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE {AT_RISK} AND NOT {q.TERMINAL_SQL}) AS at_risk,
+               COUNT(*) FILTER (WHERE s.injectiondate::date < CURRENT_DATE AND NOT {q.TERMINAL_SQL}) AS overdue
+        FROM etl.shipment s
+        WHERE {INJ_OK} AND s.injectiondate::date
+              BETWEEN CURRENT_DATE - make_interval(days => {int(window)}) AND CURRENT_DATE + 30
+        GROUP BY 1 ORDER BY 1
+    """)
+    calendar = [{
+        "day": str(r["day"]), "total": int(r["total"] or 0),
+        "at_risk": int(r["at_risk"] or 0), "overdue": int(r["overdue"] or 0),
+    } for r in cal]
+
+    return {
+        "window_days": window,
+        "carriers": carriers, "regions": regions,
+        "carrier_region": cr_cells,
+        "statuses": ["delivered", "in_transit", "arrived", "not_started", "cancelled"],
+        "region_status": region_status,
+        "calendar": calendar,
+    }
+
+
+# ---------------------------------------------------------------------------
 # milestone dwell-time — where time is lost between stages
 # ---------------------------------------------------------------------------
 def _to_dt(v):

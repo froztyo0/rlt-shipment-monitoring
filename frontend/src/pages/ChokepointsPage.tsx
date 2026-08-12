@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, Dict, fmt, TTL } from "../api";
 import { ErrorBox, ExportButton, KpiTile, Panel, SEV_COLOR, Spinner, useApi } from "../components/ui";
+import { Sankey } from "../components/charts";
 
 /* Chokepoint / SPOF board — the dose flow as a origin→carrier→hub→region graph,
    with every node ranked by how many un-injected doses it would strand if it
@@ -49,6 +50,13 @@ export default function ChokepointsPage() {
         <KpiTile label="Most concentrated" value={fmt.text(s.most_concentrated_layer)}
           sub="least fallback" />
       </div>
+
+      {d.flow?.columns?.length > 0 && (
+        <Panel title="Dose flow — origin → carrier → hub → region (band width = active doses)">
+          <Sankey columns={d.flow.columns} links={d.flow.links}
+            colColors={[LAYER_BADGE.origin.color, LAYER_BADGE.carrier.color, LAYER_BADGE.hub.color, LAYER_BADGE.region.color]} />
+        </Panel>
+      )}
 
       <Panel
         title="Top chokepoints — nodes that strand the most doses"

@@ -102,6 +102,7 @@ async def _compute(days_back: int, days_fwd: int):
             "products": set(), "members": [],
         })
 
+    paths = []   # (origin, carrier, hub, region) per active dose, for the Sankey
     for r in rows:
         so = str(r["salesordernumber"] or "").strip()
         inj = _naive_dt(r["injectiondate"])
@@ -117,15 +118,23 @@ async def _compute(days_back: int, days_fwd: int):
             else:
                 level = "upcoming"
 
+        carrier_name = str(r["carrier"] or "").strip()
+        region_name = str(r["region"] or "").strip()
+        origin_name = str(r["origin"] or "").strip()
+        hub_list = sorted(hubs_by_so.get(so, set()))
         targets = []
-        if str(r["carrier"] or "").strip():
-            targets.append(("carrier", str(r["carrier"]).strip()))
-        if str(r["region"] or "").strip():
-            targets.append(("region", str(r["region"]).strip()))
-        if str(r["origin"] or "").strip():
-            targets.append(("origin", str(r["origin"]).strip()))
-        for code in sorted(hubs_by_so.get(so, set())):
+        if carrier_name:
+            targets.append(("carrier", carrier_name))
+        if region_name:
+            targets.append(("region", region_name))
+        if origin_name:
+            targets.append(("origin", origin_name))
+        for code in hub_list:
             targets.append(("hub", code))
+
+        if active:
+            paths.append((origin_name or "?", carrier_name or "?",
+                          hub_list[0] if hub_list else "(direct)", region_name or "?"))
 
         member = {
             "salesordernumber": so, "trackingnumber": r["trackingnumber"],
@@ -187,7 +196,45 @@ async def _compute(days_back: int, days_fwd: int):
         "summary": summary,
         "top_chokepoints": [_public(n) for n in top_chokepoints],
         "layers": layers_out,
+        "flow": _build_flow(paths),
     }
+
+
+LAYER_LABELS = ["Origin", "Carrier", "Hub", "Region"]
+
+
+def _build_flow(paths: list, cap: int = 8) -> dict:
+    """Sankey data: 4 stacked columns (origin→carrier→hub→region) with the doses
+    lumped beyond the top `cap` per column into '(other)', and the flow links
+    between adjacent columns. One clean left-to-right dose-flow picture."""
+    if not paths:
+        return {"columns": [], "links": []}
+    raw = [{}, {}, {}, {}]
+    for p in paths:
+        for i in range(4):
+            raw[i][p[i]] = raw[i].get(p[i], 0) + 1
+    keep = [{k for k, _ in sorted(c.items(), key=lambda kv: -kv[1])[:cap]} for c in raw]
+
+    def nm(i: int, name: str) -> str:
+        return name if name in keep[i] else "(other)"
+
+    colnodes = [{}, {}, {}, {}]
+    links: dict = {}
+    for p in paths:
+        lumped = [nm(i, p[i]) for i in range(4)]
+        for i in range(4):
+            colnodes[i][lumped[i]] = colnodes[i].get(lumped[i], 0) + 1
+        for i in range(3):
+            k = (i, lumped[i], lumped[i + 1])
+            links[k] = links.get(k, 0) + 1
+
+    columns = [{
+        "layer": i, "label": LAYER_LABELS[i],
+        "nodes": [{"name": k, "value": v} for k, v in sorted(cn.items(), key=lambda kv: -kv[1])],
+    } for i, cn in enumerate(colnodes)]
+    linkout = [{"from_layer": k[0], "from": k[1], "to": k[2], "value": v}
+               for k, v in sorted(links.items(), key=lambda kv: -kv[1])]
+    return {"columns": columns, "links": linkout}
 
 
 def _public(n: dict) -> dict:
