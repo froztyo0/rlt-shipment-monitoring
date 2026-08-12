@@ -5,6 +5,7 @@ import ShipmentDetailPage from "./pages/ShipmentDetailPage";
 import OpsPage from "./pages/OpsPage";
 import ReportsPage from "./pages/ReportsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
+import BatchCohortsPage from "./pages/BatchCohortsPage";
 
 // key by tracking number so per-shipment state (e.g. the selected sales
 // order) resets when navigating from one shipment straight to another
@@ -57,6 +58,9 @@ export default function App() {
             <NavLink to="/ops" className={navCls}>
               Ops Issues
             </NavLink>
+            <NavLink to="/cohorts" className={navCls}>
+              Batch Cohorts
+            </NavLink>
             <NavLink to="/reports" className={navCls}>
               Reports
             </NavLink>
@@ -78,6 +82,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/ops" element={<OpsPage />} />
+          <Route path="/cohorts" element={<BatchCohortsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/shipment/:tracking" element={<ShipmentDetailRoute />} />
         </Routes>
