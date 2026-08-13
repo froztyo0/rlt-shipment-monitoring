@@ -149,10 +149,7 @@ export default function ShipmentDetailPage() {
         </div>
       )}
 
-      {/* ---- order details (full width) -------------------------------------- */}
-      <OrderDetails s={s} />
-
-      {/* ---- map + analytics (left) · order details + milestones (right) ------ */}
+      {/* ---- map + analytics (left) · milestones (right) --------------------- */}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex min-w-0 flex-col gap-4">
         <Panel
@@ -213,6 +210,9 @@ export default function ShipmentDetailPage() {
 
         <MilestonePanel miles={miles} so={String(s.salesordernumber ?? "")} />
       </div>
+
+      {/* ---- order details (reference spec) ---------------------------------- */}
+      <OrderDetails s={s} />
 
       {/* ---- diagnostics (progressive disclosure — collapsed by default) ------ */}
       <details className="group rounded-lg border border-edge bg-surface-1 p-3.5">
@@ -538,10 +538,8 @@ function DosePanel({ d }: { d: Dict }) {
         </Fact>
       </div>
 
-      <p className="mt-2 text-[11px] leading-relaxed text-ink-3">
-        Vial is calibrated to the prescribed activity at the scheduled injection time; activity then follows
-        A(t) = A₀·2^(−(t−t₀)/t½). Usable band is ±{Math.round(Number(d.tolerance) * 100)}% of prescribed —
-        below it the dose is likely wasted. Deterministic decay physics over existing batch activity columns.
+      <p className="mt-2 text-[11px] text-ink-3">
+        A(t) = A₀·2^(−(t−t₀)/t½), calibrated to the scheduled injection time · usable band ±{Math.round(Number(d.tolerance) * 100)}% of prescribed (below it the dose is likely wasted).
       </p>
     </Panel>
   );
