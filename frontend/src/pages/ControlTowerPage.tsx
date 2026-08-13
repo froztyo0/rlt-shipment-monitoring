@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -24,8 +24,67 @@ const tone = (score: number) => (score >= 1000 ? "critical" : score >= 400 ? "se
 const shipHref = (r: Dict) => `/shipment/${encodeURIComponent(String(r.trackingnumber || r.salesordernumber))}`;
 const shipName = (r: Dict) => r.trackingnumber || `SO ${r.salesordernumber}`;
 
+/* Client-side case store (localStorage) — ack / assign / SLA. The DB stays
+   strictly read-only; case state lives only in the operator's browser. */
+type CaseState = { status: "new" | "ack" | "resolved"; owner: string; firstSeen: number; ackAt?: number };
+const CASE_KEY = "ct-cases-v1";
+const caseId = (r: Dict) => String(r.trackingnumber || r.salesordernumber);
+const OWNERS = ["Me", "Carrier ops", "Site coord", "QA"];
+
+function loadCases(): Record<string, CaseState> {
+  try { return JSON.parse(localStorage.getItem(CASE_KEY) || "{}"); } catch { return {}; }
+}
+// SLA-to-acknowledge (minutes) by the most urgent reason on the case.
+function slaMinutes(r: Dict): number {
+  const rs: string[] = r.reasons ?? [];
+  if (rs.some((x) => x.includes("deadline passed"))) return 60;
+  if (rs.some((x) => x.includes("GPS silent"))) return 45;
+  if (rs.some((x) => /injects in \d+h/.test(x))) return 120;
+  if (rs.some((x) => x.includes("not yet departed"))) return 180;
+  return 240;
+}
+const fmtMins = (m: number) => (Math.abs(m) >= 60 ? `${(Math.abs(m) / 60).toFixed(1)}h` : `${Math.round(Math.abs(m))}m`);
+
 export default function ControlTowerPage() {
   const data = useApi<Dict>(() => api("/api/control-tower", undefined, { ttl: TTL.DEFAULT }), []);
+
+  // ---- case management (client-side only; DB stays read-only) ----
+  // All hooks stay ABOVE the early returns so the hook order never changes.
+  const queue: Dict[] = data.data?.action_queue ?? [];
+  const [cases, setCases] = useState<Record<string, CaseState>>(loadCases);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    const missing = queue.filter((r) => !cases[caseId(r)]);
+    if (missing.length) {
+      const nowMs = Date.now();
+      const next = { ...cases };
+      missing.forEach((r) => { next[caseId(r)] = { status: "new", owner: "", firstSeen: nowMs }; });
+      setCases(next);
+      try { localStorage.setItem(CASE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue.map((r) => caseId(r)).join(",")]);
+
+  const patchCase = (id: string, patch: Partial<CaseState>) => {
+    setCases((prev) => {
+      const cur = prev[id] ?? { status: "new" as const, owner: "", firstSeen: Date.now() };
+      const next = { ...prev, [id]: { ...cur, ...patch } };
+      try { localStorage.setItem(CASE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+  const now = Date.now();
+  const openCount = queue.filter((r) => (cases[caseId(r)]?.status ?? "new") === "new").length;
+  const ackCount = queue.filter((r) => cases[caseId(r)]?.status === "ack").length;
+  const breachCount = queue.filter((r) => {
+    const c = cases[caseId(r)];
+    return (!c || c.status === "new") && (now - (c?.firstSeen ?? now)) / 60000 > slaMinutes(r);
+  }).length;
+
   if (data.loading) return <Spinner label="Building the command picture…" />;
   if (data.error) return <ErrorBox error={data.error} />;
   const d = data.data!;
@@ -65,25 +124,83 @@ export default function ControlTowerPage() {
           sub="arrived still usable" />
       </div>
 
-      {/* 2 + 4 — action queue (predict-the-miss, ranked) */}
-      <Panel title={`Action queue — clear the top first (${(d.action_queue ?? []).length})`}>
+      {/* 2 + 4 — action queue (predict-the-miss, ranked + actionable) */}
+      <Panel
+        title="Action queue — clear the top first"
+        right={
+          <span className="flex items-center gap-2 text-[11px]">
+            <span className="rounded-full bg-grid px-2 py-0.5 text-ink-2">{openCount} open</span>
+            {ackCount > 0 && <span className="text-ink-3">{ackCount} ack’d</span>}
+            {breachCount > 0 && (
+              <span className="rounded-full px-2 py-0.5 font-medium"
+                style={{ background: `color-mix(in srgb, ${SEV_COLOR.critical} 16%, transparent)`, color: "var(--text-primary)" }}>
+                {breachCount} SLA breached
+              </span>
+            )}
+          </span>
+        }
+      >
         <div className="flex flex-col divide-y divide-grid">
-          {(d.action_queue ?? []).map((r: Dict, i: number) => (
-            <div key={i} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 py-2">
-              <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: SEV_COLOR[tone(r.score)] }} />
-              <Link to={shipHref(r)} className="min-w-[110px] text-sm font-medium text-s1 hover:underline">{shipName(r)}</Link>
-              <span className="min-w-[150px] text-xs text-ink-3">
-                {fmt.text(r.product)} · {fmt.text(r.carrier)}{r.region ? ` · ${r.region}` : ""}
-              </span>
-              <span className="flex flex-1 flex-wrap gap-1">
-                {(r.reasons ?? []).map((x: string, j: number) => (
-                  <span key={j} className="rounded-full border border-edge px-1.5 py-0.5 text-[11px] text-ink-2">{x}</span>
-                ))}
-              </span>
-              <span className="text-[13px] text-ink-2">{r.play}</span>
-            </div>
-          ))}
-          {(d.action_queue ?? []).length === 0 && (
+          {queue.map((r) => {
+            const id = caseId(r);
+            const c = cases[id] ?? { status: "new" as const, owner: "", firstSeen: now };
+            const remaining = slaMinutes(r) - (now - c.firstSeen) / 60000;
+            const resolved = c.status === "resolved";
+            const acked = c.status === "ack";
+            const breached = c.status === "new" && remaining < 0;
+            const dot = resolved ? "var(--status-good)" : acked ? "var(--series-1)" : SEV_COLOR[tone(r.score)];
+            const btn = "rounded border border-edge px-2 py-0.5 text-[11px] text-ink-2 hover:text-ink hover:border-baseline";
+            return (
+              <div key={id} className="py-2.5" style={{ opacity: resolved ? 0.55 : 1 }}>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: dot }} />
+                  <Link to={shipHref(r)} className="min-w-[104px] text-sm font-medium text-s1 hover:underline">{shipName(r)}</Link>
+                  <span className="min-w-[150px] text-xs text-ink-3">
+                    {fmt.text(r.product)} · {fmt.text(r.carrier)}{r.region ? ` · ${r.region}` : ""}
+                  </span>
+                  <span className="flex flex-1 flex-wrap gap-1">
+                    {(r.reasons ?? []).map((x: string, j: number) => (
+                      <span key={j} className="rounded-full border border-edge px-1.5 py-0.5 text-[11px] text-ink-2">{x}</span>
+                    ))}
+                  </span>
+                  {/* case controls */}
+                  <span className="ml-auto flex items-center gap-2">
+                    {resolved ? (
+                      <span className="text-[11px]" style={{ color: "var(--status-good)" }}>✓ resolved{c.owner ? ` · ${c.owner}` : ""}</span>
+                    ) : acked ? (
+                      <span className="text-[11px] text-ink-3">ack’d{c.owner ? ` · ${c.owner}` : ""}</span>
+                    ) : (
+                      <span className="tnum rounded-full px-2 py-0.5 text-[11px] font-medium"
+                        style={{
+                          background: breached ? `color-mix(in srgb, ${SEV_COLOR.critical} 16%, transparent)`
+                            : remaining < 20 ? `color-mix(in srgb, ${SEV_COLOR.serious} 15%, transparent)` : "var(--grid)",
+                          color: breached ? SEV_COLOR.critical : "var(--text-primary)",
+                        }}>
+                        {breached ? `breached ${fmtMins(remaining)}` : `SLA ${fmtMins(remaining)}`}
+                      </span>
+                    )}
+                    {!resolved && (
+                      <select value={c.owner} onChange={(e) => patchCase(id, { owner: e.target.value })}
+                        className="rounded border border-edge bg-surface-0 px-1 py-0.5 text-[11px] text-ink-2">
+                        <option value="">assign…</option>
+                        {OWNERS.map((o) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    )}
+                    {resolved ? (
+                      <button className={btn} onClick={() => patchCase(id, { status: "new" })}>Reopen</button>
+                    ) : (
+                      <>
+                        {!acked && <button className={btn} onClick={() => patchCase(id, { status: "ack", ackAt: Date.now(), owner: c.owner || "Me" })}>Ack</button>}
+                        <button className={btn} onClick={() => patchCase(id, { status: "resolved" })}>Resolve</button>
+                      </>
+                    )}
+                  </span>
+                </div>
+                <div className="mt-1 pl-4 text-[12px] text-ink-3">{r.play}</div>
+              </div>
+            );
+          })}
+          {queue.length === 0 && (
             <div className="py-6 text-center text-sm" style={{ color: "var(--status-good)" }}>✓ Nothing needs intervention right now.</div>
           )}
         </div>
