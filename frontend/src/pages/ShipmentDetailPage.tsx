@@ -56,6 +56,7 @@ export default function ShipmentDetailPage() {
   const riskSev = /high|critical/i.test(String(riskLabel ?? "")) ? "critical"
     : /med/i.test(String(riskLabel ?? "")) ? "warning" : "info";
   const status = shipmentStatus(s);
+  const sig = deliverySignal(s, pings.data ?? null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -114,7 +115,10 @@ export default function ShipmentDetailPage() {
       </div>
 
       {/* ---- decision hero: will it arrive in time & still be usable? -------- */}
-      <DecisionHero s={s} dose={dose.data ?? null} status={status} pings={pings.data ?? null} />
+      <DecisionHero s={s} dose={dose.data ?? null} status={status} pings={pings.data ?? null} sig={sig} />
+
+      {/* ---- delivery corroboration (carrier vs ROME vs GPS) ----------------- */}
+      <DeliverySources sig={sig} />
 
       {/* ---- alert banners + root cause (the "what's wrong" cluster) --------- */}
       <Banners s={s} issues={issues} rca={rca} pings={pings.data ?? null} />
@@ -316,6 +320,87 @@ function MetaItem({ label, value }: { label: string; value: string }) {
 
 /* consolidated order-details card (full width): route on the left, the order /
    dose spec grid on the right — replaces the old journey strip + dose-facts bar. */
+/* Delivery corroboration — reconcile the THREE independent delivery signals so a
+   silent carrier feed doesn't false-flag a dose as "won't arrive". The carrier
+   milestone can lag while ROME already shows Delivered and the GPS trail sits on
+   the destination — that's a carrier data gap, not a missed delivery. */
+const GEOFENCE_ARRIVE_KM = 5;
+
+function deliverySignal(s: Dict, pings: PingsResponse | null) {
+  const lc = (v: unknown) => String(v ?? "").toLowerCase();
+  const carrierDelivered =
+    /deliver|complet/.test(`${lc(s.currentmilestone)} ${lc(s.dosestatus)} ${lc(s.routestatus)}`) ||
+    !!String(s.actualdeliverytime ?? "").trim() ||
+    !!String(s.podname ?? "").trim() || !!String(s.pod_receival_time ?? "").trim();
+  const departed = !!String(s.actualdeparted ?? "").trim();
+  const rome = lc(s.rome_status);
+  const romeDelivered = /deliver|complet|arriv/.test(rome);
+  const romeShipped = /ship|transit|dispatch|out for/.test(rome);
+
+  let gpsKm: number | null = null;
+  const dest = pings?.destination;
+  if (dest && dest.lat != null && dest.lon != null) {
+    const last = [...(pings?.pings ?? [])].reverse().find((p) => !p.ghost && plottable(p.lat, p.lon));
+    if (last && last.lat != null && last.lon != null) gpsKm = haversineKm(last.lat, last.lon, dest.lat, dest.lon);
+  }
+  const gpsArrived = gpsKm != null && gpsKm <= GEOFENCE_ARRIVE_KM;
+
+  const arrivedSources = [carrierDelivered && "carrier", romeDelivered && "ROME", gpsArrived && "GPS"]
+    .filter(Boolean) as string[];
+  const carrierStale = !carrierDelivered && arrivedSources.length > 0;
+
+  let verdict = "in_transit", tone = "info", headline = "In transit";
+  if (carrierDelivered) { verdict = "delivered"; tone = "good"; headline = "Delivered"; }
+  else if (carrierStale) { verdict = "carrier_stale"; tone = "warning"; headline = "Likely delivered"; }
+  else if (!departed) { verdict = "not_started"; tone = "warning"; headline = "Not started"; }
+
+  return {
+    carrier: { state: carrierDelivered ? "delivered" : departed ? "in transit" : "not started", ok: carrierDelivered },
+    rome: { state: romeDelivered ? "delivered" : romeShipped ? "shipped" : s.rome_status ? String(s.rome_status) : "—", ok: romeDelivered },
+    gps: { state: gpsArrived ? "at destination" : gpsKm != null ? `${gpsKm.toFixed(gpsKm < 10 ? 1 : 0)} km out` : "no fix", ok: gpsArrived },
+    arrivedSources, carrierStale, verdict, tone, headline,
+  };
+}
+type DeliverySig = ReturnType<typeof deliverySignal>;
+
+function DeliverySources({ sig }: { sig: DeliverySig }) {
+  const rows = [
+    { icon: "🚚", source: "Carrier feed", ...sig.carrier },
+    { icon: "📋", source: "ROME order", ...sig.rome },
+    { icon: "📡", source: "Sensitech GPS", ...sig.gps },
+  ];
+  return (
+    <Panel title="Delivery corroboration — three independent sources">
+      <div className="grid gap-2.5 md:grid-cols-[repeat(3,1fr)_minmax(0,1.25fr)]">
+        {rows.map((r) => (
+          <div key={r.source} className="flex items-center gap-2.5 rounded-lg border px-3 py-2.5"
+            style={{ borderColor: r.ok ? `color-mix(in srgb, ${SEV_COLOR.good} 45%, var(--border))` : "var(--border)" }}>
+            <span className="text-base leading-none">{r.icon}</span>
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-wide text-ink-3">{r.source}</div>
+              <div className="truncate text-sm font-medium" style={{ color: r.ok ? SEV_COLOR.good : "var(--text-primary)" }}>{r.state}</div>
+            </div>
+            <span className="ml-auto text-sm" style={{ color: r.ok ? SEV_COLOR.good : "var(--text-muted)" }}>{r.ok ? "✓" : "○"}</span>
+          </div>
+        ))}
+        <div className="flex flex-col justify-center rounded-lg border px-3 py-2.5"
+          style={{ borderColor: SEV_COLOR[sig.tone], background: `color-mix(in srgb, ${SEV_COLOR[sig.tone]} 8%, transparent)` }}>
+          <div className="text-[11px] uppercase tracking-wide text-ink-3">Reconciled</div>
+          <div className="text-sm font-semibold" style={{ color: sig.tone === "info" ? "var(--text-primary)" : SEV_COLOR[sig.tone] }}>
+            {sig.carrierStale ? "Likely delivered · carrier feed stale" : sig.headline}
+          </div>
+        </div>
+      </div>
+      {sig.carrierStale && (
+        <p className="mt-2.5 text-xs text-ink-2">
+          The carrier hasn't reported delivery, but <b>{sig.arrivedSources.join(" and ")}</b> show the dose has arrived —
+          a <b>carrier data gap</b>, not a missed delivery. It should not be treated as at-risk on the carrier signal alone.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
 /* Decision hero — the four questions a coordinator triages a dose by, answered
    at a glance and colour-graded by urgency: will it arrive before the injection
    deadline, and will the dose still be usable when it does. */
@@ -324,8 +409,8 @@ const DOSE_TONE: Record<string, string> = {
   underdosed: "critical", will_underdose: "serious", pre_window: "info", in_window: "good",
 };
 
-function DecisionHero({ s, dose, status, pings }: {
-  s: Dict; dose: Dict | null; status: { label: string; sev: string }; pings: PingsResponse | null;
+function DecisionHero({ s, dose, status, pings, sig }: {
+  s: Dict; dose: Dict | null; status: { label: string; sev: string }; pings: PingsResponse | null; sig: DeliverySig;
 }) {
   const now = Date.now();
   const delivered = status.label === "Delivered";
@@ -351,6 +436,9 @@ function DecisionHero({ s, dose, status, pings }: {
     delivery = { label: "Delivery", value: "Delivered", sub: fmt.dt(s.actualdeliverytime), tone: "good" };
   } else if (cancelled) {
     delivery = { label: "Delivery", value: "Cancelled", sub: fmt.text(s.delayreason), tone: "critical" };
+  } else if (sig.carrierStale) {
+    // carrier feed hasn't reported delivery but ROME/GPS say it arrived — don't false-flag
+    delivery = { label: "Delivery", value: "Arrived*", sub: `carrier feed stale · per ${sig.arrivedSources.join(" & ")}`, tone: "warning" };
   } else if (eta) {
     delivery = {
       label: "Projected delivery",
