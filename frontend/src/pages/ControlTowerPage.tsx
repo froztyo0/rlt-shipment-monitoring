@@ -20,14 +20,41 @@ const EXC_META: Record<string, { label: string; tone: string }> = {
   high_risk: { label: "High risk", tone: "critical" },
 };
 
+const HANDOVER_GROUPS = [
+  { status: "new", label: "Open — needs pickup", tone: "critical" },
+  { status: "ack", label: "In progress", tone: "info" },
+  { status: "resolved", label: "Resolved this shift", tone: "good" },
+] as const;
+
 const tone = (score: number) => (score >= 1000 ? "critical" : score >= 400 ? "serious" : "warning");
 const shipHref = (r: Dict) => `/shipment/${encodeURIComponent(String(r.trackingnumber || r.salesordernumber))}`;
 const shipName = (r: Dict) => r.trackingnumber || `SO ${r.salesordernumber}`;
 
 /* Client-side case store (localStorage) — ack / assign / SLA. The DB stays
    strictly read-only; case state lives only in the operator's browser. */
-type CaseState = { status: "new" | "ack" | "resolved"; owner: string; firstSeen: number; ackAt?: number };
+type CaseSnap = { name: string; href: string; reason: string };
+type CaseState = { status: "new" | "ack" | "resolved"; owner: string; firstSeen: number; ackAt?: number; snap?: CaseSnap };
 const CASE_KEY = "ct-cases-v1";
+
+// clipboard that also works on non-secure origins (HTTP / embedded); resolves
+// only on real success so the UI never falsely claims "copied".
+function copyText(txt: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(txt);
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = txt;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      ok ? resolve() : reject(new Error("copy failed"));
+    } catch (e) { reject(e); }
+  });
+}
 const caseId = (r: Dict) => String(r.trackingnumber || r.salesordernumber);
 const OWNERS = ["Me", "Carrier ops", "Site coord", "QA"];
 
@@ -53,6 +80,7 @@ export default function ControlTowerPage() {
   const queue: Dict[] = data.data?.action_queue ?? [];
   const [cases, setCases] = useState<Record<string, CaseState>>(loadCases);
   const [, setTick] = useState(0);
+  const [copied, setCopied] = useState(false);
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 30000);
     return () => clearInterval(t);
@@ -62,7 +90,12 @@ export default function ControlTowerPage() {
     if (missing.length) {
       const nowMs = Date.now();
       const next = { ...cases };
-      missing.forEach((r) => { next[caseId(r)] = { status: "new", owner: "", firstSeen: nowMs }; });
+      missing.forEach((r) => {
+        next[caseId(r)] = {
+          status: "new", owner: "", firstSeen: nowMs,
+          snap: { name: shipName(r), href: shipHref(r), reason: (r.reasons ?? [])[0] ?? "" },
+        };
+      });
       setCases(next);
       try { localStorage.setItem(CASE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
     }
@@ -78,12 +111,46 @@ export default function ControlTowerPage() {
     });
   };
   const now = Date.now();
-  const openCount = queue.filter((r) => (cases[caseId(r)]?.status ?? "new") === "new").length;
-  const ackCount = queue.filter((r) => cases[caseId(r)]?.status === "ack").length;
+  // The handover brief is grouped from the CASE STORE, not the live queue — so
+  // a case that has been acknowledged/resolved still appears even after the
+  // backend stops flagging its shipment (which is exactly when it's resolved).
+  // "Open" stays queue-driven (only doses the backend is actively flagging).
+  const queueIds = new Set(queue.map((r) => caseId(r)));
+  type BriefItem = { id: string; name: string; href: string; reason: string; owner: string };
+  const briefItems = (st: string): BriefItem[] => {
+    const fromQueue: BriefItem[] = queue
+      .filter((r) => (cases[caseId(r)]?.status ?? "new") === st)
+      .map((r) => ({ id: caseId(r), name: shipName(r), href: shipHref(r), reason: (r.reasons ?? [])[0] ?? "", owner: cases[caseId(r)]?.owner ?? "" }));
+    if (st === "new") return fromQueue;
+    const fromStore: BriefItem[] = Object.entries(cases)
+      .filter(([id, c]) => c.status === st && !queueIds.has(id))
+      .map(([id, c]) => ({ id, name: c.snap?.name ?? id, href: c.snap?.href ?? `/shipment/${encodeURIComponent(id)}`, reason: c.snap?.reason ?? "", owner: c.owner }));
+    return [...fromQueue, ...fromStore];
+  };
+  const openCount = briefItems("new").length;
+  const ackCount = briefItems("ack").length;
+  const resolvedCount = briefItems("resolved").length;
   const breachCount = queue.filter((r) => {
     const c = cases[caseId(r)];
     return (!c || c.status === "new") && (now - (c?.firstSeen ?? now)) / 60000 > slaMinutes(r);
   }).length;
+
+  const copyBrief = () => {
+    const line = (x: BriefItem, withOwner = false) =>
+      `  • ${x.name} — ${x.reason}${withOwner && x.owner ? `  [${x.owner}]` : ""}`;
+    const txt = [
+      `RLT Control Tower — shift handover · ${new Date().toLocaleString()}`,
+      ``,
+      `OPEN — needs pickup (${briefItems("new").length}):`, ...briefItems("new").map((x) => line(x)),
+      ``,
+      `IN PROGRESS (${briefItems("ack").length}):`, ...briefItems("ack").map((x) => line(x, true)),
+      ``,
+      `RESOLVED THIS SHIFT (${briefItems("resolved").length}):`, ...briefItems("resolved").map((x) => line(x)),
+    ].join("\n");
+    copyText(txt)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); })
+      .catch(() => { /* leave the button unchanged on failure */ });
+  };
 
   if (data.loading) return <Spinner label="Building the command picture…" />;
   if (data.error) return <ErrorBox error={data.error} />;
@@ -101,6 +168,9 @@ export default function ControlTowerPage() {
     };
   });
   const todayIso = new Date().toISOString().slice(0, 10);
+  const dout: Dict = d.demand_outlook ?? {};
+  const hasCap = Number(dout.capacity_per_day) > 0;   // false when there's no delivery history yet
+  const dmax = Math.max(Number(dout.capacity_per_day) || 1, ...(dout.days ?? []).map((y: Dict) => Number(y.demand)), 1);
 
   return (
     <div className="flex flex-col gap-4">
@@ -316,7 +386,50 @@ export default function ControlTowerPage() {
         <CalendarHeatmap days={calDays} today={todayIso} />
       </Panel>
 
-      {/* 9 — geographic command map + shift handover */}
+      {/* 9a — demand vs capacity outlook */}
+      <Panel
+        title="Demand vs capacity — upcoming injection load"
+        right={
+          <span className="text-xs text-ink-3">
+            {hasCap
+              ? <>capacity ~{fmt.num(dout.capacity_per_day)}/day (proven peak) · {fmt.num(dout.total_upcoming)} upcoming</>
+              : <>{fmt.num(dout.total_upcoming)} upcoming · no delivery history to estimate capacity</>}
+            {hasCap && dout.crunch_days > 0 && (
+              <span className="ml-1 font-medium" style={{ color: SEV_COLOR.critical }}>· {dout.crunch_days} crunch day{dout.crunch_days === 1 ? "" : "s"}</span>
+            )}
+          </span>
+        }
+      >
+        {(dout.days ?? []).length === 0 ? (
+          <div className="py-4 text-sm text-ink-3">No upcoming injections scheduled in the window.</div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5">
+              {(dout.days ?? []).map((x: Dict) => (
+                <div key={x.day} className="grid grid-cols-[96px_1fr_36px] items-center gap-2">
+                  <span className="text-xs text-ink-2">{fmt.date(x.day)}</span>
+                  <span className="relative h-4 rounded bg-grid">
+                    {hasCap && (
+                      <span className="absolute inset-y-0 z-10 w-px"
+                        style={{ left: `${(Number(dout.capacity_per_day) / dmax) * 100}%`, background: "var(--text-secondary)" }} />
+                    )}
+                    <span className="absolute inset-y-0 left-0 rounded"
+                      style={{ width: `${Math.max(2, (Number(x.demand) / dmax) * 100)}%`, background: x.over_capacity ? SEV_COLOR.critical : "var(--series-1)" }} />
+                  </span>
+                  <span className="tnum text-right text-xs" style={{ color: x.over_capacity ? SEV_COLOR.critical : "var(--text-secondary)" }}>{x.demand}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 text-[11px] text-ink-3">
+              {hasCap
+                ? "Vertical line = proven daily capacity (p90 of historical deliveries); bars past it (red) are crunch days to pre-stage for."
+                : "Bars show upcoming injections per day. Capacity can't be estimated until there's delivery history in the window."}
+            </div>
+          </>
+        )}
+      </Panel>
+
+      {/* 9 — geographic command map + shift-handover brief */}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
         <Panel title={`Command map — ${(d.map_points ?? []).length} at-risk doses plotted`}>
           {(d.map_points ?? []).length === 0 ? (
@@ -336,15 +449,45 @@ export default function ControlTowerPage() {
           )}
         </Panel>
 
-        <Panel title={`Shift handover — changed in 12h (${(d.changed_12h ?? []).length})`}>
-          <div className="flex flex-col gap-1">
-            {(d.changed_12h ?? []).map((it: Dict, i: number) => (
-              <div key={i} className="flex items-center gap-2 text-[13px]">
-                <Link to={shipHref(it)} className="text-s1 hover:underline">{shipName(it)}</Link>
-                <span className="ml-auto truncate text-ink-3" title={String(it.note ?? "")}>{fmt.text(it.note)}</span>
-              </div>
-            ))}
-            {(d.changed_12h ?? []).length === 0 && <div className="text-sm text-ink-3">No changes in the last 12h.</div>}
+        <Panel
+          title="Shift handover brief"
+          right={
+            <button onClick={copyBrief}
+              className="rounded-md border border-edge px-2 py-0.5 text-[11px] text-ink-2 hover:text-ink">
+              {copied ? "✓ copied" : "Copy brief"}
+            </button>
+          }
+        >
+          <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-3">
+            <span><b className="text-ink">{openCount}</b> open</span>
+            <span><b className="text-ink">{ackCount}</b> in progress</span>
+            <span><b className="text-ink">{resolvedCount}</b> resolved</span>
+            {breachCount > 0 && <span style={{ color: SEV_COLOR.critical }}><b>{breachCount}</b> SLA breached</span>}
+          </div>
+          <div className="flex flex-col gap-2.5">
+            {HANDOVER_GROUPS.map((g) => {
+              const items = briefItems(g.status);
+              if (!items.length) return null;
+              return (
+                <div key={g.status}>
+                  <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium">
+                    <span className="inline-block h-2 w-2 rounded-full" style={{ background: SEV_COLOR[g.tone] }} />
+                    {g.label} ({items.length})
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    {items.slice(0, 6).map((r) => (
+                      <div key={r.id} className="flex items-center gap-1.5 text-[12px]">
+                        <Link to={r.href} className="text-s1 hover:underline">{r.name}</Link>
+                        <span className="truncate text-ink-3">{r.reason}</span>
+                        {g.status === "ack" && r.owner && <span className="ml-auto shrink-0 text-ink-3">{r.owner}</span>}
+                      </div>
+                    ))}
+                    {items.length > 6 && <div className="text-[11px] text-ink-3">+{items.length - 6} more</div>}
+                  </div>
+                </div>
+              );
+            })}
+            {queue.length === 0 && <div className="text-sm text-ink-3">Nothing in the queue.</div>}
           </div>
         </Panel>
       </div>

@@ -101,6 +101,8 @@ async def _compute():
     conc: dict[str, dict] = {"carrier": {}, "region": {}, "origin": {}}
     otif_ok = otif_tot = integ_ok = integ_tot = 0
     changed = []
+    deliv_by_day: dict[str, int] = {}     # historical throughput (proven capacity)
+    demand_by_day: dict[str, dict] = {}   # upcoming injection demand
 
     def add_exc(code, item):
         exc.setdefault(code, []).append(item)
@@ -139,6 +141,18 @@ async def _compute():
                     integ_ok += 1
             if adt and adt.date() == today:
                 fleet["delivered_today"] += 1
+            if adt:
+                dd = str(adt.date())
+                deliv_by_day[dd] = deliv_by_day.get(dd, 0) + 1
+
+        # upcoming demand: un-injected doses scheduled today or later
+        if active and inj and inj.date() >= today:
+            dk = str(inj.date())
+            dm = demand_by_day.setdefault(dk, {"day": dk, "demand": 0, "sites": {}})
+            dm["demand"] += 1
+            site = str(r["region"] or "").strip()
+            if site:
+                dm["sites"][site] = dm["sites"].get(site, 0) + 1
 
         if not active:
             continue
@@ -216,6 +230,27 @@ async def _compute():
 
     queue.sort(key=lambda x: -x["score"])
 
+    # demand vs capacity — upcoming injection load vs proven daily throughput
+    dvals = sorted(deliv_by_day.values())
+    if dvals:
+        p90 = dvals[min(len(dvals) - 1, int(round(0.9 * (len(dvals) - 1))))]
+        cap = max(1, p90)
+        avg_cap = round(sum(dvals) / len(dvals), 1)
+    else:
+        cap, avg_cap = 0, 0.0
+    demand_days = [{
+        "day": dm["day"], "demand": dm["demand"],
+        "over_capacity": bool(cap) and dm["demand"] > cap,
+        "sites": [{"name": k, "n": v} for k, v in sorted(dm["sites"].items(), key=lambda kv: -kv[1])],
+    } for dm in sorted(demand_by_day.values(), key=lambda x: x["day"])]
+    demand_outlook = {
+        "capacity_per_day": cap,
+        "avg_throughput_per_day": avg_cap,
+        "days": demand_days,
+        "crunch_days": sum(1 for x in demand_days if x["over_capacity"]),
+        "total_upcoming": sum(x["demand"] for x in demand_days),
+    }
+
     # feeds — tiny recency queries
     feeds = []
     for label, table, thr in FEEDS:
@@ -259,6 +294,7 @@ async def _compute():
         },
         "carriers": carrier_list,
         "concentration": {"carrier": top("carrier"), "region": top("region"), "origin": top("origin")},
+        "demand_outlook": demand_outlook,
         "calendar": [cal[k] for k in sorted(cal.keys())],
         "feeds": feeds,
         "changed_12h": changed[:12],
