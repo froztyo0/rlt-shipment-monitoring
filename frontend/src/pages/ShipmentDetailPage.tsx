@@ -472,12 +472,32 @@ function DecisionHero({ s, dose, status, pings, sig }: {
     tone: status.sev,
   };
 
-  const tiles = [deadline, delivery, dose_, location];
+  const tiles = [
+    { ...deadline, icon: "⏱" }, { ...delivery, icon: "📦" },
+    { ...dose_, icon: "☢" }, { ...location, icon: "📍" },
+  ];
   const worst = SEV_RANK.find((t) => tiles.some((x) => x.tone === t)) ?? "info";
   const valColor = (tone: string) => (tone === "info" ? "var(--text-primary)" : SEV_COLOR[tone]);
 
   const tint = (t: string) =>
     ["critical", "serious", "warning"].includes(t) ? `color-mix(in srgb, ${SEV_COLOR[t]} 6%, transparent)` : undefined;
+
+  // slim timeline — where "now" and the projected delivery (ETA) sit relative to
+  // the injection deadline: the core "will the dose beat the clock" question, seen at a glance.
+  const timeline = (() => {
+    if (!injTs || delivered || cancelled) return null;
+    const injMsAbs = injTs.getTime();
+    const etaMs = eta?.getTime() ?? null;
+    const pts = [now, injMsAbs, ...(etaMs != null ? [etaMs] : [])];
+    let lo = Math.min(...pts), hi = Math.max(...pts);
+    const span0 = Math.max(hi - lo, 3.6e6);
+    lo -= span0 * 0.06; hi += span0 * 0.06;
+    const span = hi - lo;
+    const pct = (t: number) => Math.max(0, Math.min(100, ((t - lo) / span) * 100));
+    const tone = overdue || (etaMs != null && etaMs > injMsAbs) ? "critical"
+      : etaMs != null && etaMs <= injMsAbs ? "good" : "serious";
+    return { now, etaMs, injMsAbs, pct, tone };
+  })();
 
   return (
     <div className="overflow-hidden rounded-xl border bg-surface-1 shadow-[var(--elev-1)]"
@@ -491,6 +511,7 @@ function DecisionHero({ s, dose, status, pings, sig }: {
             <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-3">
               <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: SEV_COLOR[t.tone] }} />
               {t.label}
+              <span className="ml-auto text-[13px] leading-none opacity-40" aria-hidden>{t.icon}</span>
             </div>
             <div className="mt-2 truncate text-[22px] font-semibold leading-none"
                  style={{ color: valColor(t.tone) }} title={t.value}>
@@ -500,6 +521,51 @@ function DecisionHero({ s, dose, status, pings, sig }: {
           </div>
         ))}
       </div>
+      {timeline && (
+        <div className="border-t border-grid px-4 py-3">
+          <div className="relative h-1.5 rounded-full bg-surface-0">
+            {/* elapsed, up to now */}
+            <div className="absolute inset-y-0 left-0 rounded-full bg-baseline"
+                 style={{ width: `${timeline.pct(timeline.now)}%` }} />
+            {/* projected transit remaining, now → ETA */}
+            {timeline.etaMs != null && (
+              <div className="absolute inset-y-0 rounded-full opacity-60"
+                   style={{
+                     left: `${timeline.pct(Math.min(timeline.now, timeline.etaMs))}%`,
+                     width: `${Math.abs(timeline.pct(timeline.etaMs) - timeline.pct(timeline.now))}%`,
+                     background: SEV_COLOR[timeline.tone],
+                   }} />
+            )}
+            {/* injection deadline */}
+            <span className="absolute top-1/2 h-3 w-[2px] -translate-y-1/2"
+                  style={{ left: `${timeline.pct(timeline.injMsAbs)}%`, background: SEV_COLOR.critical }} />
+            {/* ETA */}
+            {timeline.etaMs != null && (
+              <span className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-surface-1"
+                    style={{ left: `${timeline.pct(timeline.etaMs)}%`, background: SEV_COLOR[timeline.tone] }} />
+            )}
+            {/* now */}
+            <span className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-surface-1 bg-ink"
+                  style={{ left: `${timeline.pct(timeline.now)}%` }} />
+          </div>
+          {/* legend — decodes the markers; deliberately NOT a left→right axis */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] uppercase tracking-wide text-ink-3">
+            <span className="flex items-center gap-1.5">
+              <i className="inline-block h-1.5 w-1.5 rounded-full bg-ink" />now
+            </span>
+            {timeline.etaMs != null && (
+              <span className="flex items-center gap-1.5">
+                <i className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: SEV_COLOR[timeline.tone] }} />
+                ETA {fmt.dt(s.etadeliverytime)}
+              </span>
+            )}
+            <span className="flex items-center gap-1.5">
+              <i className="inline-block h-2 w-[2px]" style={{ background: SEV_COLOR.critical }} />
+              injection {fmt.date(s.injectiondate)}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
