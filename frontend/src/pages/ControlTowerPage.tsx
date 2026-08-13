@@ -18,6 +18,7 @@ const EXC_META: Record<string, { label: string; tone: string }> = {
   no_eta: { label: "No carrier ETA", tone: "warning" },
   not_departed: { label: "Not departed", tone: "serious" },
   high_risk: { label: "High risk", tone: "critical" },
+  carrier_data_gap: { label: "Carrier data gap — likely delivered (per ROME/GPS)", tone: "info" },
 };
 
 const HANDOVER_GROUPS = [

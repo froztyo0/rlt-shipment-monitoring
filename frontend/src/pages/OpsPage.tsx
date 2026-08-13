@@ -57,13 +57,15 @@ function InjectionRiskTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
         <KpiTile label="At risk" value={fmt.num(d.at_risk)} tone={d.at_risk > 0 ? "serious" : "good"}
           sub="active, injection window" />
         <KpiTile label="Will miss / overdue" value={fmt.num(sev.critical ?? 0)}
           tone={(sev.critical ?? 0) > 0 ? "critical" : "good"} sub="ETA past deadline / vial" />
         <KpiTile label="Tight (<12h)" value={fmt.num(sev.serious ?? 0)}
           tone={(sev.serious ?? 0) > 0 ? "serious" : "good"} />
+        <KpiTile label="Carrier data gaps" value={fmt.num(d.data_gaps ?? 0)}
+          tone={(d.data_gaps ?? 0) > 0 ? "warning" : undefined} sub="delivered per ROME/GPS" />
         <KpiTile label="On track" value={fmt.num(d.on_track)} tone="good" sub={`of ${d.checked} checked`} />
       </div>
 

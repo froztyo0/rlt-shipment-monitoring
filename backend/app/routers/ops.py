@@ -412,7 +412,7 @@ async def _compute_injection_risk(limit: int):
                s.injectiondate, s.injectiontime, s.etadeliverytime, s.planneddeliverydate,
                s.vialexpirationtime, s.currentmilestone, s.currentmilestonestep,
                s.dosestatus, s.risk, s.riskbucket, s.modeoftransportation,
-               s.actualdeparted, s.lastgps, s.lastupdateddt
+               s.actualdeparted, s.lastgps, s.lastupdateddt, s.rome_status, s.geofence_status
         FROM etl.shipment s
         WHERE {q.ACTIVE_SQL}
           AND s.injectiondate::text ~ '^\\s*\\d{{4}}-\\d{{2}}-\\d{{2}}'
@@ -422,13 +422,21 @@ async def _compute_injection_risk(limit: int):
     """)
 
     now = datetime.now()
-    risk_items, on_track = [], 0
+    risk_items, on_track, data_gaps = [], 0, 0
     by_severity: dict[str, int] = {}
     for r in rows:
         deadline = _injection_deadline(r["injectiondate"], r["injectiontime"])
         eta = _naive_dt(r["etadeliverytime"])
         vial = _naive_dt(r["vialexpirationtime"])
         slack_h = round((deadline - eta).total_seconds() / 3600.0, 1) if (deadline and eta) else None
+
+        # Carrier feed hasn't closed it, but ROME/geofence say delivered → a
+        # carrier data gap, not a delivery risk. Don't rank it as at-risk.
+        rome = str(r["rome_status"] or "").lower()
+        geo = str(r["geofence_status"] or "").lower()
+        if ("deliver" in rome or "complet" in rome) or ("arriv" in geo or "delivered" in geo or "inside" in geo):
+            data_gaps += 1
+            continue
 
         if deadline is not None and deadline < now:
             sev, verdict = "critical", "Injection time passed — not delivered"
@@ -471,6 +479,7 @@ async def _compute_injection_risk(limit: int):
         "checked": len(rows),
         "at_risk": len(risk_items),
         "on_track": on_track,
+        "data_gaps": data_gaps,
         "by_severity": by_severity,
         "items": risk_items,
     }

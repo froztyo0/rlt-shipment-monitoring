@@ -79,6 +79,7 @@ async def _compute():
                s.risk, s.riskbucket, s.etadeliverytime, s.planneddeliverydate,
                s.actualdeliverytime, s.actualdeparted, s.vialexpirationtime,
                s.lastgps, s.batchnumber, s.countofalerts, s.lastupdateddt,
+               s.rome_status, s.geofence_status,
                {q.DELIVERED_SQL} AS is_delivered,
                {q.CANCELLED_SQL} AS is_cancelled,
                COALESCE({_RISK_HI}, FALSE) AS hi_risk
@@ -167,6 +168,17 @@ async def _compute():
         cs = carriers.setdefault(carrier, {"carrier": carrier, "active": 0, "overdue": 0,
                                            "at_risk": 0, "gps_lost": 0})
         cs["active"] += 1
+
+        # Delivery corroboration: the carrier feed hasn't closed this dose, but if
+        # ROME says delivered or geofence shows arrival it almost certainly DID
+        # arrive — a carrier data gap, not a miss. Don't let it inflate the
+        # at-risk / overdue queue; surface it as its own exception to reconcile.
+        rome = str(r["rome_status"] or "").lower()
+        geo = str(r["geofence_status"] or "").lower()
+        if ("deliver" in rome or "complet" in rome) or ("arriv" in geo or "delivered" in geo or "inside" in geo):
+            src = "ROME" if ("deliver" in rome or "complet" in rome) else "geofence"
+            add_exc("carrier_data_gap", _mini(r, f"{src} says delivered — carrier feed stale"))
+            continue
 
         # per-dose urgency score + reasons + recommended play
         score, reasons, play = 0, [], None
