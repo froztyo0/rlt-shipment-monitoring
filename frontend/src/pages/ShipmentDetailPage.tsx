@@ -61,17 +61,18 @@ export default function ShipmentDetailPage() {
   return (
     <div className="flex flex-col gap-4">
       {/* ---- page header --------------------------------------------------- */}
-      <div className="rounded-lg border border-edge bg-surface-1 px-4 py-3.5">
+      <div className="rounded-xl border border-edge bg-surface-1 px-5 py-4 shadow-[var(--elev-1)]">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <Link to="/" className="text-sm text-s1 hover:underline">← Back</Link>
-          <h1 className="tnum text-xl font-semibold tracking-tight">{fmt.text(s.trackingnumber ?? tracking)}</h1>
-          <span className="rounded-full px-2.5 py-0.5 text-xs font-medium"
-            style={{ background: `color-mix(in srgb, ${SEV_COLOR[status.sev]} 16%, transparent)`, color: "var(--text-primary)" }}>
+          <Link to="/" className="text-sm text-s1 hover:underline">←&nbsp;Back</Link>
+          <h1 className="tnum text-2xl font-semibold tracking-tight">{fmt.text(s.trackingnumber ?? tracking)}</h1>
+          <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+            style={{ background: `color-mix(in srgb, ${SEV_COLOR[status.sev]} 14%, transparent)`, color: "var(--text-primary)" }}>
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: SEV_COLOR[status.sev] }} />
             {status.label}
           </span>
           {riskLabel && <SeverityBadge severity={riskSev} label={`risk: ${riskLabel}`} />}
           {s.product && (
-            <span className="rounded border border-edge px-2 py-0.5 text-xs font-medium text-ink-2">
+            <span className="rounded-md border border-edge px-2 py-0.5 text-xs font-medium text-ink-2">
               {fmt.text(s.product)}
             </span>
           )}
@@ -475,23 +476,27 @@ function DecisionHero({ s, dose, status, pings, sig }: {
   const worst = SEV_RANK.find((t) => tiles.some((x) => x.tone === t)) ?? "info";
   const valColor = (tone: string) => (tone === "info" ? "var(--text-primary)" : SEV_COLOR[tone]);
 
+  const tint = (t: string) =>
+    ["critical", "serious", "warning"].includes(t) ? `color-mix(in srgb, ${SEV_COLOR[t]} 6%, transparent)` : undefined;
+
   return (
-    <div className="overflow-hidden rounded-xl border bg-surface-1 shadow-sm"
-         style={{ borderColor: `color-mix(in srgb, ${SEV_COLOR[worst]} 55%, var(--border))` }}>
+    <div className="overflow-hidden rounded-xl border bg-surface-1 shadow-[var(--elev-1)]"
+         style={{ borderColor: `color-mix(in srgb, ${SEV_COLOR[worst]} 50%, var(--border))` }}>
       <div className="h-1" style={{ background: SEV_COLOR[worst] }} />
       <div className="grid grid-cols-2 lg:grid-cols-4">
         {tiles.map((t, i) => (
           <div key={t.label}
-               className={`px-4 py-3.5 ${i % 2 === 1 ? "border-l border-grid" : ""} ${i >= 2 ? "border-t border-grid" : ""} lg:border-t-0 ${i > 0 ? "lg:border-l lg:border-grid" : ""}`}>
-            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-ink-3">
+               className={`px-4 py-4 ${i % 2 === 1 ? "border-l border-grid" : ""} ${i >= 2 ? "border-t border-grid" : ""} lg:border-t-0 ${i > 0 ? "lg:border-l lg:border-grid" : ""}`}
+               style={{ background: tint(t.tone) }}>
+            <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-3">
               <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: SEV_COLOR[t.tone] }} />
               {t.label}
             </div>
-            <div className="mt-1.5 truncate text-[19px] font-semibold leading-tight"
+            <div className="mt-2 truncate text-[22px] font-semibold leading-none"
                  style={{ color: valColor(t.tone) }} title={t.value}>
               {t.value}
             </div>
-            <div className="mt-0.5 truncate text-xs text-ink-3" title={t.sub}>{t.sub}</div>
+            <div className="mt-1 truncate text-xs text-ink-3" title={t.sub}>{t.sub}</div>
           </div>
         ))}
       </div>

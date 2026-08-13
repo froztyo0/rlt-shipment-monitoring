@@ -79,8 +79,8 @@ export function KpiTile({
     <button
       onClick={onClick}
       disabled={!onClick}
-      className={`rounded-lg border bg-surface-1 px-3.5 py-3 text-left transition-shadow ${
-        onClick ? "cursor-pointer hover:shadow-md" : "cursor-default"
+      className={`rounded-xl border bg-surface-1 px-3.5 py-3 text-left shadow-[var(--elev-1)] transition-all ${
+        onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-[var(--elev-2)]" : "cursor-default"
       }`}
       style={{ borderColor: active ? "var(--series-1)" : "var(--border)" }}
     >
@@ -138,9 +138,9 @@ export function BarList({
 /* ---- panels, loading, errors --------------------------------------------- */
 export function Panel({ title, children, right }: { title: string; children: ReactNode; right?: ReactNode }) {
   return (
-    <section className="rounded-lg border border-edge bg-surface-1 p-3.5">
-      <div className="mb-2.5 flex items-center justify-between">
-        <h2 className="text-[13px] font-semibold tracking-tight">{title}</h2>
+    <section className="rounded-xl border border-edge bg-surface-1 p-4 shadow-[var(--elev-1)]">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-[13px] font-semibold tracking-tight text-ink">{title}</h2>
         {right}
       </div>
       {children}
