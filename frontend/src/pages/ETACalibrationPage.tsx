@@ -30,6 +30,12 @@ export default function ETACalibrationPage() {
   const carriers: Dict[] = d.carriers ?? [];
   const live: Dict[] = d.live ?? [];
 
+  // worst-offending lanes by absolute bias — fills the space beside the heatmap
+  const rankedBias = [...carriers]
+    .filter((c) => c.median_bias_h != null)
+    .sort((a, b) => Math.abs(Number(b.median_bias_h)) - Math.abs(Number(a.median_bias_h)))
+    .slice(0, 6);
+
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold tracking-tight">Carrier ETA Calibration</h1>
@@ -121,21 +127,48 @@ export default function ETACalibrationPage() {
       </Panel>
 
       <Panel title="Carrier delivery bias — median hours late (red) / early (green)">
-        <Heatmap
-          diverging
-          mid={0}
-          rowLabelWidth={110}
-          format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(0)}h`}
-          rows={[...new Set(carriers.map((c) => String(c.carrier)))]}
-          cols={[...new Set(carriers.map((c) => String(c.mode)))]}
-          cells={carriers.map((c): HeatCell => ({
-            row: String(c.carrier),
-            col: String(c.mode),
-            value: Number(c.median_bias_h),
-            title: `${c.carrier} · ${c.mode}: ${Number(c.median_bias_h) > 0 ? "+" : ""}${c.median_bias_h}h bias · ${c.on_time_pct}% on-time · n=${c.n}${c.trusted ? "" : " (thin sample)"}`,
-          }))}
-        />
-        {carriers.length === 0 && <div className="text-sm text-ink-3">No delivered history in the window.</div>}
+        {carriers.length === 0 ? (
+          <div className="py-4 text-sm text-ink-3">No delivered history in the window.</div>
+        ) : (
+          <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr] lg:items-start">
+            <Heatmap
+              fill
+              diverging
+              mid={0}
+              rowLabelWidth={110}
+              format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(0)}h`}
+              rows={[...new Set(carriers.map((c) => String(c.carrier)))]}
+              cols={[...new Set(carriers.map((c) => String(c.mode)))]}
+              cells={carriers.map((c): HeatCell => ({
+                row: String(c.carrier),
+                col: String(c.mode),
+                value: Number(c.median_bias_h),
+                title: `${c.carrier} · ${c.mode}: ${Number(c.median_bias_h) > 0 ? "+" : ""}${c.median_bias_h}h bias · ${c.on_time_pct}% on-time · n=${c.n}${c.trusted ? "" : " (thin sample)"}`,
+              }))}
+            />
+            <div>
+              <h3 className="mb-2 text-xs font-medium text-ink-2">Most-biased lanes</h3>
+              <div className="flex flex-col gap-1.5">
+                {rankedBias.map((c) => {
+                  const b = Number(c.median_bias_h);
+                  const tone = b > 0 ? "var(--status-critical)" : b < 0 ? "var(--status-good)" : "var(--text-secondary)";
+                  return (
+                    <div key={`${c.carrier}-${c.mode}`}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-edge bg-surface-0 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{c.carrier} · {c.mode}</div>
+                        <div className="text-[11px] text-ink-3">
+                          {c.on_time_pct}% on-time · n={c.n}{c.trusted ? "" : " · thin sample"}
+                        </div>
+                      </div>
+                      <div className="tnum shrink-0 text-base font-semibold" style={{ color: tone }}>{hrs(c.median_bias_h)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </Panel>
     </div>
   );

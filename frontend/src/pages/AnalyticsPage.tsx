@@ -82,6 +82,16 @@ export default function AnalyticsPage() {
   });
   const todayIso = new Date().toISOString().slice(0, 10);
 
+  // calendar summary — fills the panel's right rail with at-a-glance load stats
+  const calArr: Dict[] = m.calendar ?? [];
+  const calStats = {
+    total: calArr.reduce((s, c) => s + Number(c.total || 0), 0),
+    overdueDays: calArr.filter((c) => Number(c.overdue) > 0).length,
+    overdueDoses: calArr.reduce((s, c) => s + Number(c.overdue || 0), 0),
+    atRiskDays: calArr.filter((c) => Number(c.at_risk) > 0).length,
+    busiest: calArr.reduce<Dict | null>((a, c) => (Number(c.total) > Number(a?.total ?? -1) ? c : a), null),
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -120,33 +130,68 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {/* ---- injection calendar heatmap ------------------------------------ */}
-      <Panel title="Injection calendar — daily dose load">
-        {matrix.loading ? <Spinner /> : matrix.error ? <ErrorBox error={matrix.error} /> : (
-          <>
-            <CalendarHeatmap days={calDays} today={todayIso} />
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-ink-3">
-              {[["overdue", "var(--status-critical)"], ["at-risk", "var(--status-serious)"], ["scheduled", "var(--series-1)"]].map(([l, c]) => (
-                <span key={l} className="flex items-center gap-1">
-                  <span className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: c }} />{l}
-                </span>
-              ))}
-              <span className="ml-auto">outlined = today · shade = volume</span>
+      {/* ---- injection calendar (+ load summary) paired with reliability --- */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="Injection calendar — daily dose load">
+          {matrix.loading ? <Spinner /> : matrix.error ? <ErrorBox error={matrix.error} /> : (
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+              <div className="shrink-0">
+                <CalendarHeatmap days={calDays} today={todayIso} />
+                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-3">
+                  {[["overdue", "var(--status-critical)"], ["at-risk", "var(--status-serious)"], ["scheduled", "var(--series-1)"]].map(([l, c]) => (
+                    <span key={l} className="flex items-center gap-1">
+                      <span className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: c }} />{l}
+                    </span>
+                  ))}
+                  <span>· outlined = today</span>
+                </div>
+              </div>
+              <div className="grid flex-1 grid-cols-2 content-start gap-2.5">
+                {[
+                  { label: "Injections", value: fmt.num(calStats.total), sub: `last ${win} days` },
+                  { label: "Overdue days", value: fmt.num(calStats.overdueDays),
+                    sub: `${calStats.overdueDoses} dose${calStats.overdueDoses === 1 ? "" : "s"}`,
+                    tone: calStats.overdueDays > 0 ? "var(--status-critical)" : undefined },
+                  { label: "At-risk days", value: fmt.num(calStats.atRiskDays), sub: "high/critical",
+                    tone: calStats.atRiskDays > 0 ? "var(--status-serious)" : undefined },
+                  { label: "Busiest day", value: calStats.busiest ? fmt.num(calStats.busiest.total) : "—",
+                    sub: calStats.busiest ? fmt.date(calStats.busiest.day) : "—" },
+                ].map((st) => (
+                  <div key={st.label} className="rounded-lg border border-edge bg-surface-0 px-3 py-2.5">
+                    <div className="text-[11px] uppercase tracking-wide text-ink-3">{st.label}</div>
+                    <div className="mt-0.5 text-xl font-semibold tabular-nums" style={{ color: st.tone }}>{st.value}</div>
+                    <div className="mt-0.5 truncate text-[11px] text-ink-3">{st.sub}</div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </>
-        )}
-      </Panel>
+          )}
+        </Panel>
+        <Panel title="Carrier reliability by region — on-time % (red → green)">
+          {matrix.loading ? <Spinner /> : matrix.error ? <ErrorBox error={matrix.error} /> : (m.carriers ?? []).length === 0 ? (
+            <div className="py-4 text-sm text-ink-3">No delivered shipments in this window to score.</div>
+          ) : (
+            <Heatmap
+              fill rows={m.carriers ?? []} cols={m.regions ?? []} cells={crCells}
+              rowLabelWidth={110}
+              format={(v) => `${Math.round(v)}%`}
+              cellColor={(v) => `color-mix(in srgb, var(--status-good) ${Math.max(6, Math.min(100, v))}%, var(--status-critical))`}
+            />
+          )}
+        </Panel>
+      </div>
 
-      {/* ---- carrier × region reliability heatmap -------------------------- */}
-      <Panel title="Carrier reliability by region — on-time % (red → green)">
-        {matrix.loading ? <Spinner /> : matrix.error ? <ErrorBox error={matrix.error} /> : (m.carriers ?? []).length === 0 ? (
-          <div className="py-4 text-sm text-ink-3">No delivered shipments in this window to score.</div>
+      {/* ---- region × status heatmap (5 cols → fills a full-width row) ------ */}
+      <Panel title="Shipment status by region">
+        {matrix.loading ? <Spinner /> : (m.region_status ?? []).length === 0 ? (
+          <div className="py-4 text-sm text-ink-3">No shipments in this window.</div>
         ) : (
           <Heatmap
-            rows={m.carriers ?? []} cols={m.regions ?? []} cells={crCells}
-            rowLabelWidth={120}
-            format={(v) => `${Math.round(v)}%`}
-            cellColor={(v) => `color-mix(in srgb, var(--status-good) ${Math.max(6, Math.min(100, v))}%, var(--status-critical))`}
+            fill
+            rows={(m.region_status ?? []).map((r: Dict) => String(r.region))}
+            cols={(m.statuses ?? []).map((s: string) => STATUS_LABEL[s] ?? s)}
+            cells={rsCells} rowLabelWidth={90} high="var(--series-1)"
+            format={(v) => String(v)}
           />
         )}
       </Panel>
@@ -229,20 +274,6 @@ export default function AnalyticsPage() {
           {overview.loading ? <Spinner /> : <Donut data={modeData} />}
         </Panel>
       </div>
-
-      {/* ---- region × status heatmap -------------------------------------- */}
-      <Panel title="Shipment status by region">
-        {matrix.loading ? <Spinner /> : (m.region_status ?? []).length === 0 ? (
-          <div className="py-4 text-sm text-ink-3">No shipments in this window.</div>
-        ) : (
-          <Heatmap
-            rows={(m.region_status ?? []).map((r: Dict) => String(r.region))}
-            cols={(m.statuses ?? []).map((s: string) => STATUS_LABEL[s] ?? s)}
-            cells={rsCells} rowLabelWidth={90} high="var(--series-1)"
-            format={(v) => String(v)}
-          />
-        )}
-      </Panel>
 
       {/* ---- weekly on-time trend ------------------------------------------ */}
       <Panel title="Weekly delivery outcomes (by injection week)">
