@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Route, Routes, useParams } from "react-router-dom";
 import { refreshAllData } from "./api";
 import DashboardPage from "./pages/DashboardPage";
+import ControlTowerPage from "./pages/ControlTowerPage";
 import ShipmentDetailPage from "./pages/ShipmentDetailPage";
 import OpsPage from "./pages/OpsPage";
 import ReportsPage from "./pages/ReportsPage";
@@ -56,6 +57,9 @@ export default function App() {
             <NavLink to="/" end className={navCls}>
               Dashboard
             </NavLink>
+            <NavLink to="/control-tower" className={navCls}>
+              Control Tower
+            </NavLink>
             <NavLink to="/analytics" className={navCls}>
               Analytics
             </NavLink>
@@ -100,6 +104,7 @@ export default function App() {
       <main className="mx-auto max-w-[1500px] px-4 py-4">
         <Routes>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/control-tower" element={<ControlTowerPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/ops" element={<OpsPage />} />
           <Route path="/cohorts" element={<BatchCohortsPage />} />
